@@ -9,9 +9,11 @@ bl_info = {
 }
 
 import bpy
-from .ui import TAXILINES_PT_main
+from .ui import TAXILINES_PT_main, TAXILINES_OT_reload_addon
+
 
 classes = (
+    TAXILINES_OT_reload_addon,
     TAXILINES_PT_main,
 )
 
