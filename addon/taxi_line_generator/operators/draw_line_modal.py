@@ -57,23 +57,18 @@ class TAXILINES_OT_draw_taxi_line(bpy.types.Operator):
         # Create object
         curve_obj = bpy.data.objects.new("TaxiLineCurve_SRC", curve_data)
 
-        # Hidden source curves collection
-        src_col = self._ensure_collection(context, "_TAXI_LINES_SRC")
-        src_col.hide_viewport = True
-        src_col.hide_select = True
-        src_col.hide_render = True
+        # Main taxi lines collection (curve is the primary editable object).
+        col = self._ensure_collection(context, "TAXI_LINES")
 
-        src_col.objects.link(curve_obj)
-        curve_obj.hide_viewport = True
-        curve_obj.hide_select = True
+        col.objects.link(curve_obj)
+        curve_obj.hide_viewport = False
+        curve_obj.hide_select = False
         curve_obj.hide_render = True
-
-        # Visible meshes collection
-        mesh_col = self._ensure_collection(context, "TAXI_LINES")
 
         mesh_data = bpy.data.meshes.new("TaxiLineRibbon")
         mesh_obj = bpy.data.objects.new("TaxiLineRibbon", mesh_data)
-        mesh_col.objects.link(mesh_obj)
+        col.objects.link(mesh_obj)
+        mesh_obj.hide_select = True
 
         mod = _ensure_ribbon_mesh_modifier(mesh_obj)
         _set_modifier_input(mod, "Source Curve", curve_obj)
@@ -85,8 +80,8 @@ class TAXILINES_OT_draw_taxi_line(bpy.types.Operator):
         curve_obj["taxilines_mesh"] = mesh_obj.name
 
         # Make active
-        context.view_layer.objects.active = mesh_obj
-        mesh_obj.select_set(True)
+        context.view_layer.objects.active = curve_obj
+        curve_obj.select_set(True)
 
         # Create first spline
         spline = curve_data.splines.new(type="BEZIER")
@@ -107,17 +102,17 @@ class TAXILINES_OT_draw_taxi_line(bpy.types.Operator):
     def modal(self, context, event):
         # Finish (Right Click / Esc)
         if event.type in {"RIGHTMOUSE", "ESC"} and event.value == "PRESS":
-            if self._mesh_obj:
-                context.view_layer.objects.active = self._mesh_obj
-                self._mesh_obj.select_set(True)
+            if self._curve_obj:
+                context.view_layer.objects.active = self._curve_obj
+                self._curve_obj.select_set(True)
 
             return {"FINISHED"}
 
         # Finish (Enter)
         if event.type in {"RET", "NUMPAD_ENTER"} and event.value == "PRESS":
-            if self._mesh_obj:
-                context.view_layer.objects.active = self._mesh_obj
-                self._mesh_obj.select_set(True)
+            if self._curve_obj:
+                context.view_layer.objects.active = self._curve_obj
+                self._curve_obj.select_set(True)
 
             return {"FINISHED"}
 
