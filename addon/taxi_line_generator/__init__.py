@@ -9,21 +9,24 @@ bl_info = {
 }
 
 import bpy
-from .ui import TAXILINES_PT_main, TAXILINES_OT_reload_addon
+
+from .operators.create_ribbon_mesh import TAXILINES_OT_create_ribbon_mesh
 from .operators.draw_line_modal import TAXILINES_OT_draw_taxi_line
-
-
+from .properties import register_properties, unregister_properties
+from .ui import TAXILINES_OT_reload_addon, TAXILINES_PT_main
 
 
 classes = (
     TAXILINES_OT_reload_addon,
     TAXILINES_OT_draw_taxi_line,
+    TAXILINES_OT_create_ribbon_mesh,
     TAXILINES_PT_main,
 )
 
 
-
 def register():
+    register_properties()
+
     for cls in classes:
         bpy.utils.register_class(cls)
 
@@ -31,3 +34,5 @@ def register():
 def unregister():
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
+
+    unregister_properties()

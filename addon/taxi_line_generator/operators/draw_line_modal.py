@@ -1,6 +1,7 @@
 import bpy
 from bpy_extras import view3d_utils
-from mathutils import Vector
+
+from ..properties import apply_ribbon_width
 
 
 def _get_mouse_ray(context, event):
@@ -34,6 +35,7 @@ class TAXILINES_OT_draw_taxi_line(bpy.types.Operator):
 
     _curve_obj = None
     _spline = None
+    _has_first_point = False
 
     def invoke(self, context, event):
         if context.area.type != "VIEW_3D":
@@ -57,6 +59,9 @@ class TAXILINES_OT_draw_taxi_line(bpy.types.Operator):
 
         col.objects.link(obj)
 
+        width_m = getattr(context.scene, "tlg_line_width", 0.15)
+        apply_ribbon_width(context, obj, width_m)
+
         # Make active
         context.view_layer.objects.active = obj
         obj.select_set(True)
@@ -71,15 +76,14 @@ class TAXILINES_OT_draw_taxi_line(bpy.types.Operator):
 
         self._curve_obj = obj
         self._spline = spline
+        self._has_first_point = False
 
         context.window_manager.modal_handler_add(self)
         return {"RUNNING_MODAL"}
 
     def modal(self, context, event):
-
         # Finish (Right Click / Esc)
         if event.type in {"RIGHTMOUSE", "ESC"} and event.value == "PRESS":
-
             if self._curve_obj:
                 context.view_layer.objects.active = self._curve_obj
                 self._curve_obj.select_set(True)
@@ -88,7 +92,6 @@ class TAXILINES_OT_draw_taxi_line(bpy.types.Operator):
 
         # Finish (Enter)
         if event.type in {"RET", "NUMPAD_ENTER"} and event.value == "PRESS":
-
             if self._curve_obj:
                 context.view_layer.objects.active = self._curve_obj
                 self._curve_obj.select_set(True)
@@ -97,7 +100,6 @@ class TAXILINES_OT_draw_taxi_line(bpy.types.Operator):
 
         # Add point (Left Click)
         if event.type == "LEFTMOUSE" and event.value == "PRESS":
-
             origin, direction = _get_mouse_ray(context, event)
             hit = _intersect_ray_with_plane(origin, direction, plane_z=0.0)
 
@@ -106,26 +108,27 @@ class TAXILINES_OT_draw_taxi_line(bpy.types.Operator):
                 return {"RUNNING_MODAL"}
 
             spline = self._spline
-
             if spline is None:
                 return {"CANCELLED"}
 
             points = spline.bezier_points
 
-            # First point
-            if len(points) == 1 and points[0].co.length < 1e-6:
+            # First point: set object origin to the first click, store point at local (0,0,0)
+            if not self._has_first_point:
+                self._curve_obj.location = hit
 
-                points[0].co = hit
+                points[0].co = (0.0, 0.0, 0.0)
                 points[0].handle_left_type = "AUTO"
                 points[0].handle_right_type = "AUTO"
+                self._has_first_point = True
 
             # Add new point
             else:
-
                 spline.bezier_points.add(count=1)
 
                 new_pt = spline.bezier_points[-1]
-                new_pt.co = hit
+                local_hit = self._curve_obj.matrix_world.inverted() @ hit
+                new_pt.co = local_hit
                 new_pt.handle_left_type = "AUTO"
                 new_pt.handle_right_type = "AUTO"
 
