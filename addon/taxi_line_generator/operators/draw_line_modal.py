@@ -73,8 +73,9 @@ class TAXILINES_OT_draw_taxi_line(bpy.types.Operator):
         mod = _ensure_ribbon_mesh_modifier(mesh_obj)
         _set_modifier_input(mod, "Source Curve", curve_obj)
 
-        width_m = getattr(context.scene, "tlg_line_width", 0.15)
-        _set_modifier_input(mod, "Width", float(width_m))
+        width_m = getattr(context.scene, "tlg_default_width", 0.15)
+        curve_obj.tlg_line_width = float(width_m)
+        _set_modifier_input(mod, "Width", float(curve_obj.tlg_line_width))
 
         mesh_obj["taxilines_source_curve"] = curve_obj.name
         curve_obj["taxilines_mesh"] = mesh_obj.name
@@ -100,6 +101,39 @@ class TAXILINES_OT_draw_taxi_line(bpy.types.Operator):
         return {"RUNNING_MODAL"}
 
     def modal(self, context, event):
+        # Allow viewport navigation while drawing (MMB orbit/pan, wheel zoom, trackpad, NDOF, etc).
+        nav_event_types = {
+            "MIDDLEMOUSE",
+            "WHEELUPMOUSE",
+            "WHEELDOWNMOUSE",
+            "WHEELINMOUSE",
+            "WHEELOUTMOUSE",
+            "MOUSEPAN",
+            "TRACKPADPAN",
+            "TRACKPADZOOM",
+            "NDOF_MOTION",
+            "NDOF_BUTTON_MENU",
+            "NDOF_BUTTON_FIT",
+            "NDOF_BUTTON_TOP",
+            "NDOF_BUTTON_BOTTOM",
+            "NDOF_BUTTON_LEFT",
+            "NDOF_BUTTON_RIGHT",
+            "NDOF_BUTTON_FRONT",
+            "NDOF_BUTTON_BACK",
+            "NDOF_BUTTON_ISO1",
+            "NDOF_BUTTON_ISO2",
+        }
+        if event.type in nav_event_types:
+            return {"PASS_THROUGH"}
+
+        # Support "Alt + LMB" (emulate 3-button mouse / alt-nav) without placing points.
+        if event.alt and event.type == "LEFTMOUSE":
+            return {"PASS_THROUGH"}
+
+        # Don't treat Alt+RMB as "finish" if the user uses it for navigation.
+        if event.alt and event.type == "RIGHTMOUSE":
+            return {"PASS_THROUGH"}
+
         # Finish (Right Click / Esc)
         if event.type in {"RIGHTMOUSE", "ESC"} and event.value == "PRESS":
             if self._curve_obj:

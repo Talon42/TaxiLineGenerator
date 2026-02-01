@@ -131,36 +131,65 @@ def apply_width_to_taxi_mesh(context, mesh_obj, width_m):
         context.view_layer.update()
 
 
-def tlg_line_width_update(scene, context):
-    width_m = scene.tlg_line_width
+def _find_linked_mesh_for_curve(curve_obj):
+    mesh_name = curve_obj.get("taxilines_mesh") if curve_obj else None
+    if mesh_name:
+        mesh_obj = bpy.data.objects.get(mesh_name)
+        if mesh_obj and mesh_obj.type == "MESH":
+            return mesh_obj
 
-    for obj in context.selected_objects:
-        if obj.type == "MESH":
-            apply_width_to_taxi_mesh(context, obj, width_m)
-        elif obj.type == "CURVE":
-            mesh_name = obj.get("taxilines_mesh")
-            if not mesh_name:
+    if curve_obj:
+        for obj in bpy.data.objects:
+            if obj.type != "MESH":
                 continue
-            mesh_obj = bpy.data.objects.get(mesh_name)
-            if mesh_obj and mesh_obj.type == "MESH":
-                apply_width_to_taxi_mesh(context, mesh_obj, width_m)
+            if obj.get("taxilines_source_curve") == curve_obj.name:
+                return obj
+
+    return None
+
+
+def _tlg_curve_width_update(obj, context):
+    if not obj or obj.type != "CURVE":
+        return
+
+    mesh_obj = _find_linked_mesh_for_curve(obj)
+    if mesh_obj is None:
+        return
+
+    apply_width_to_taxi_mesh(context, mesh_obj, obj.tlg_line_width)
+
+    if context and context.area:
+        context.area.tag_redraw()
 
 
 def register_properties():
-    bpy.types.Scene.tlg_line_width = bpy.props.FloatProperty(
-        name="Line Width",
-        description="Taxi line width (meters). Applies live to selected curve objects",
+    bpy.types.Scene.tlg_default_width = bpy.props.FloatProperty(
+        name="Default Line Width",
+        description="Default taxi line width (meters) for newly created lines",
         default=0.15,
         min=0.001,
         soft_max=2.0,
         subtype="DISTANCE",
-        update=tlg_line_width_update,
+    )
+
+    bpy.types.Object.tlg_line_width = bpy.props.FloatProperty(
+        name="Line Width",
+        description="Taxi line width (meters) for this line",
+        default=0.15,
+        min=0.001,
+        soft_max=2.0,
+        subtype="DISTANCE",
+        update=_tlg_curve_width_update,
     )
 
 
 def unregister_properties():
     try:
-        del bpy.types.Scene.tlg_line_width
+        del bpy.types.Scene.tlg_default_width
+    except Exception:
+        pass
+    try:
+        del bpy.types.Object.tlg_line_width
     except Exception:
         pass
 
