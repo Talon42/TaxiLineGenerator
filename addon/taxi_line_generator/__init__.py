@@ -10,12 +10,17 @@ bl_info = {
 
 import bpy
 from .ui import TAXILINES_PT_main, TAXILINES_OT_reload_addon
+from .operators.draw_line_modal import TAXILINES_OT_draw_taxi_line
+
+
 
 
 classes = (
     TAXILINES_OT_reload_addon,
+    TAXILINES_OT_draw_taxi_line,
     TAXILINES_PT_main,
 )
+
 
 
 def register():

@@ -47,4 +47,9 @@ class TAXILINES_PT_main(bpy.types.Panel):
         layout.row().operator("taxilines.reload_addon", icon="FILE_REFRESH")
         layout.separator()
 
+        layout.operator("taxilines.draw_taxi_line", icon="GREASEPENCIL")
+        layout.separator()
         layout.label(text="Addon loaded ✅")
+        layout.label(text="Left-click = add point on Z=0")
+        layout.label(text="Enter/Right-click = finish")
+
