@@ -1,7 +1,7 @@
 import bpy
 from bpy_extras import view3d_utils
 
-from ..properties import apply_ribbon_width
+from ..properties import _ensure_ribbon_mesh_modifier, _set_modifier_input
 
 
 def _get_mouse_ray(context, event):
@@ -36,6 +36,14 @@ class TAXILINES_OT_draw_taxi_line(bpy.types.Operator):
     _curve_obj = None
     _spline = None
     _has_first_point = False
+    _mesh_obj = None
+
+    def _ensure_collection(self, context, name):
+        col = bpy.data.collections.get(name)
+        if col is None:
+            col = bpy.data.collections.new(name)
+            context.scene.collection.children.link(col)
+        return col
 
     def invoke(self, context, event):
         if context.area.type != "VIEW_3D":
@@ -47,24 +55,38 @@ class TAXILINES_OT_draw_taxi_line(bpy.types.Operator):
         curve_data.dimensions = "3D"
 
         # Create object
-        obj = bpy.data.objects.new("TaxiLineCurve", curve_data)
+        curve_obj = bpy.data.objects.new("TaxiLineCurve_SRC", curve_data)
 
-        # Ensure TAXI_LINES collection exists
-        col_name = "TAXI_LINES"
-        col = bpy.data.collections.get(col_name)
+        # Hidden source curves collection
+        src_col = self._ensure_collection(context, "_TAXI_LINES_SRC")
+        src_col.hide_viewport = True
+        src_col.hide_select = True
+        src_col.hide_render = True
 
-        if col is None:
-            col = bpy.data.collections.new(col_name)
-            context.scene.collection.children.link(col)
+        src_col.objects.link(curve_obj)
+        curve_obj.hide_viewport = True
+        curve_obj.hide_select = True
+        curve_obj.hide_render = True
 
-        col.objects.link(obj)
+        # Visible meshes collection
+        mesh_col = self._ensure_collection(context, "TAXI_LINES")
+
+        mesh_data = bpy.data.meshes.new("TaxiLineRibbon")
+        mesh_obj = bpy.data.objects.new("TaxiLineRibbon", mesh_data)
+        mesh_col.objects.link(mesh_obj)
+
+        mod = _ensure_ribbon_mesh_modifier(mesh_obj)
+        _set_modifier_input(mod, "Source Curve", curve_obj)
 
         width_m = getattr(context.scene, "tlg_line_width", 0.15)
-        apply_ribbon_width(context, obj, width_m)
+        _set_modifier_input(mod, "Width", float(width_m))
+
+        mesh_obj["taxilines_source_curve"] = curve_obj.name
+        curve_obj["taxilines_mesh"] = mesh_obj.name
 
         # Make active
-        context.view_layer.objects.active = obj
-        obj.select_set(True)
+        context.view_layer.objects.active = mesh_obj
+        mesh_obj.select_set(True)
 
         # Create first spline
         spline = curve_data.splines.new(type="BEZIER")
@@ -74,7 +96,8 @@ class TAXILINES_OT_draw_taxi_line(bpy.types.Operator):
         bp.handle_left_type = "AUTO"
         bp.handle_right_type = "AUTO"
 
-        self._curve_obj = obj
+        self._curve_obj = curve_obj
+        self._mesh_obj = mesh_obj
         self._spline = spline
         self._has_first_point = False
 
@@ -84,17 +107,17 @@ class TAXILINES_OT_draw_taxi_line(bpy.types.Operator):
     def modal(self, context, event):
         # Finish (Right Click / Esc)
         if event.type in {"RIGHTMOUSE", "ESC"} and event.value == "PRESS":
-            if self._curve_obj:
-                context.view_layer.objects.active = self._curve_obj
-                self._curve_obj.select_set(True)
+            if self._mesh_obj:
+                context.view_layer.objects.active = self._mesh_obj
+                self._mesh_obj.select_set(True)
 
             return {"FINISHED"}
 
         # Finish (Enter)
         if event.type in {"RET", "NUMPAD_ENTER"} and event.value == "PRESS":
-            if self._curve_obj:
-                context.view_layer.objects.active = self._curve_obj
-                self._curve_obj.select_set(True)
+            if self._mesh_obj:
+                context.view_layer.objects.active = self._mesh_obj
+                self._mesh_obj.select_set(True)
 
             return {"FINISHED"}
 

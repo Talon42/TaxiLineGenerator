@@ -92,6 +92,9 @@ class TAXILINES_PT_main(bpy.types.Panel):
         layout.separator()
 
         layout.operator("taxilines.draw_taxi_line", icon="GREASEPENCIL")
+        row = layout.row(align=True)
+        row.operator("taxilines.edit_path", icon="CURVE_BEZCURVE")
+        row.operator("taxilines.finish_editing", icon="CHECKMARK")
         layout.operator("taxilines.create_ribbon_mesh", icon="OUTLINER_OB_MESH")
         layout.separator()
         layout.label(text="Addon loaded バ.")
