@@ -1,9 +1,8 @@
 import bpy
 
-
 _TLG_RIBBON_MESH_NODEGROUP_NAME = "TLG_RibbonMesh"
 _TLG_RIBBON_MESH_MODIFIER_NAME = "TLG_RibbonMesh"
-_TLG_RIBBON_MESH_NODEGROUP_VERSION = 3
+_TLG_RIBBON_MESH_NODEGROUP_VERSION = 4
 
 
 def _ensure_ribbon_mesh_nodegroup():
@@ -48,8 +47,17 @@ def _ensure_ribbon_mesh_nodegroup():
     n_set_curve_radius = nodes.new("GeometryNodeSetCurveRadius")
     n_set_curve_radius.location = (-20, 0)
 
+    # Densify the curve before converting to mesh so corners have more "bevel"/rounding
+    # in the generated ribbon (prevents visibly faceted turns on low-resolution curves).
+    n_resample = nodes.new("GeometryNodeResampleCurve")
+    n_resample.location = (90, 0)
+    try:
+        n_resample.mode = "LENGTH"
+    except Exception:
+        pass
+
     n_curve_to_mesh = nodes.new("GeometryNodeCurveToMesh")
-    n_curve_to_mesh.location = (200, 0)
+    n_curve_to_mesh.location = (320, 0)
 
     n_curve_line = nodes.new("GeometryNodeCurvePrimitiveLine")
     n_curve_line.location = (-50, -220)
@@ -80,11 +88,29 @@ def _ensure_ribbon_mesh_nodegroup():
     links.new(n_in.outputs["Width"], n_mul_width.inputs[0])
     links.new(radius_out, n_mul_width.inputs[1])
 
+    # Resample length is derived from width: smaller segment length => smoother corners.
+    # Keep a small minimum to avoid extremely dense meshes on tiny widths.
+    n_seg_len_mul = nodes.new("ShaderNodeMath")
+    n_seg_len_mul.operation = "MULTIPLY"
+    n_seg_len_mul.location = (90, -220)
+    n_seg_len_mul.inputs[1].default_value = 0.25
+
+    n_seg_len_max = nodes.new("ShaderNodeMath")
+    n_seg_len_max.operation = "MAXIMUM"
+    n_seg_len_max.location = (240, -220)
+    n_seg_len_max.inputs[1].default_value = 0.02
+
+    links.new(n_in.outputs["Width"], n_seg_len_mul.inputs[0])
+    links.new(n_seg_len_mul.outputs[0], n_seg_len_max.inputs[0])
+    if "Length" in n_resample.inputs:
+        links.new(n_seg_len_max.outputs[0], n_resample.inputs["Length"])
+
     # Input curve -> set curve radius (base width * per-point radius) -> Curve to Mesh with profile curve -> Output
     links.new(n_in.outputs["Source Curve"], n_obj_info.inputs["Object"])
     links.new(n_obj_info.outputs["Geometry"], n_set_curve_radius.inputs["Curve"])
     links.new(n_mul_width.outputs[0], n_set_curve_radius.inputs["Radius"])
-    links.new(n_set_curve_radius.outputs["Curve"], n_curve_to_mesh.inputs["Curve"])
+    links.new(n_set_curve_radius.outputs["Curve"], n_resample.inputs["Curve"])
+    links.new(n_resample.outputs["Curve"], n_curve_to_mesh.inputs["Curve"])
     links.new(n_curve_line.outputs["Curve"], n_curve_to_mesh.inputs["Profile Curve"])
 
     links.new(n_curve_to_mesh.outputs["Mesh"], n_out.inputs["Geometry"])

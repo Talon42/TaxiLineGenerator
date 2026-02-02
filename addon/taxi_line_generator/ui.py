@@ -90,12 +90,13 @@ class TAXILINES_PT_main(bpy.types.Panel):
 
         active = context.view_layer.objects.active
         if active and active.type == "CURVE" and "taxilines_mesh" in active:
-            layout.prop(active, "tlg_line_width")
+            layout.prop(active, "tlg_line_width", text="Line Width")
         else:
-            layout.prop(context.scene, "tlg_default_width")
+            layout.prop(context.scene, "tlg_default_width", text="Default Line Width")
         layout.separator()
 
         layout.operator("taxilines.draw_taxi_line", icon="GREASEPENCIL")
+        layout.operator("taxilines.normalize_curve", icon="MOD_CURVE")
         layout.separator()
         layout.label(text="Addon loaded バ.")
         layout.label(text="Left-click = add point on Z=0")
