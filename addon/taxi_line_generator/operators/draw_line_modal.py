@@ -166,6 +166,56 @@ class TAXILINES_OT_draw_taxi_line(bpy.types.Operator):
 
             return {"FINISHED"}
 
+        # Undo last placed point (keep drawing).
+        # Note: Blender's global undo can terminate modal operators; we implement a local
+        # "remove last point" so users can Ctrl+Z while continuing the line.
+        if event.type == "Z" and event.value == "PRESS" and (event.ctrl or event.oskey):
+            if not self._curve_obj or not self._curve_obj.data:
+                return {"RUNNING_MODAL"}
+
+            spline = None
+            if len(self._curve_obj.data.splines) > self._spline_index:
+                spline = self._curve_obj.data.splines[self._spline_index]
+            if spline is None or spline.type != "BEZIER":
+                return {"RUNNING_MODAL"}
+
+            points = spline.bezier_points
+            if len(points) <= 1:
+                # Don't remove the first point/origin anchor.
+                return {"RUNNING_MODAL"}
+
+            # Delete via operator in Edit Mode (RNA collections don't reliably support point removal).
+            self._safe_mode_set(context, self._curve_obj, "EDIT")
+            try:
+                for bp in points:
+                    bp.select_control_point = False
+                    if hasattr(bp, "select_left_handle"):
+                        bp.select_left_handle = False
+                    if hasattr(bp, "select_right_handle"):
+                        bp.select_right_handle = False
+
+                points[-1].select_control_point = True
+                with context.temp_override(
+                    object=self._curve_obj,
+                    active_object=self._curve_obj,
+                    selected_objects=[self._curve_obj],
+                    selected_editable_objects=[self._curve_obj],
+                ):
+                    bpy.ops.curve.delete(type="VERT")
+            except Exception:
+                # If delete fails for any reason, keep drawing without crashing.
+                return {"RUNNING_MODAL"}
+
+            # Recompute handles on the remaining points.
+            self._safe_mode_set(context, self._curve_obj, "OBJECT")
+            apply_taxi_handles_to_spline(spline)
+
+            self._curve_obj.data.update_tag()
+            self._curve_obj.update_tag()
+            self._safe_mode_set(context, self._curve_obj, "EDIT")
+            context.area.tag_redraw()
+            return {"RUNNING_MODAL"}
+
         # Finish (Enter)
         if event.type in {"RET", "NUMPAD_ENTER"} and event.value == "PRESS":
             if self._curve_obj:

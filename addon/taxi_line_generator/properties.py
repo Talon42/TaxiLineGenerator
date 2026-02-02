@@ -193,8 +193,9 @@ def register_properties():
         name="Default Line Width",
         description="Default taxi line width (meters) for newly created lines",
         default=0.15,
-        min=0.001,
-        soft_max=2.0,
+        min=0.01,
+        soft_min=0.01,
+        soft_max=10.0,
         subtype="DISTANCE",
     )
 
@@ -202,8 +203,9 @@ def register_properties():
         name="Line Width",
         description="Taxi line width (meters) for this line",
         default=0.15,
-        min=0.001,
-        soft_max=2.0,
+        min=0.01,
+        soft_min=0.01,
+        soft_max=10.0,
         subtype="DISTANCE",
         update=_tlg_curve_width_update,
     )
