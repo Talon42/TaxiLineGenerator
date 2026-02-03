@@ -1,5 +1,5 @@
-import bpy
-import addon_utils
+import bpy  # pyright: ignore[reportMissingImports]
+import addon_utils  # pyright: ignore[reportMissingImports]
 import importlib
 import sys
 from datetime import datetime, timezone

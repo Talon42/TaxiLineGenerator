@@ -1,4 +1,4 @@
-import bpy
+import bpy  # pyright: ignore[reportMissingImports]
 
 _TLG_RIBBON_MESH_NODEGROUP_NAME = "TLG_RibbonMesh"
 _TLG_RIBBON_MESH_MODIFIER_NAME = "TLG_RibbonMesh"
