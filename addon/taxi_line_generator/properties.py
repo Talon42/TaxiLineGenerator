@@ -827,6 +827,20 @@ def _tlg_view_mode_update(scene, context):
 
 
 def register_properties():
+    bpy.types.WindowManager.tlg_ui_is_drawing_line = bpy.props.BoolProperty(
+        name="Drawing Taxi Line",
+        description="Internal UI state: drawing modal operator is active",
+        default=False,
+        options={"HIDDEN"},
+    )
+
+    bpy.types.WindowManager.tlg_ui_is_resuming_line = bpy.props.BoolProperty(
+        name="Resuming Taxi Line",
+        description="Internal UI state: resume modal operator is active",
+        default=False,
+        options={"HIDDEN"},
+    )
+
     bpy.types.Scene.tlg_default_width = bpy.props.FloatProperty(
         name="Default Line Width",
         description="Default taxi line width (meters) for newly created lines",
@@ -905,6 +919,14 @@ def register_properties():
 
 
 def unregister_properties():
+    try:
+        del bpy.types.WindowManager.tlg_ui_is_drawing_line
+    except Exception:
+        pass
+    try:
+        del bpy.types.WindowManager.tlg_ui_is_resuming_line
+    except Exception:
+        pass
     try:
         del bpy.types.Scene.tlg_default_width
     except Exception:

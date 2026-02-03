@@ -44,6 +44,25 @@ class TAXILINES_OT_draw_taxi_line(bpy.types.Operator):
     _spline_index = 0
     _has_first_point = False
 
+    def _set_ui_state(self, context, *, active):
+        wm = getattr(context, "window_manager", None)
+        if wm is None:
+            return
+
+        try:
+            if hasattr(wm, "tlg_ui_is_drawing_line"):
+                wm.tlg_ui_is_drawing_line = bool(active)
+            if active and hasattr(wm, "tlg_ui_is_resuming_line"):
+                wm.tlg_ui_is_resuming_line = False
+        except Exception:
+            pass
+
+        if getattr(context, "area", None) is not None:
+            try:
+                context.area.tag_redraw()
+            except Exception:
+                pass
+
     def _safe_mode_set(self, context, obj, mode):
         if obj is None:
             return
@@ -62,6 +81,8 @@ class TAXILINES_OT_draw_taxi_line(bpy.types.Operator):
         if context.area.type != "VIEW_3D":
             self.report({"ERROR"}, "Run this in the 3D View.")
             return {"CANCELLED"}
+
+        self._set_ui_state(context, active=True)
 
         # Create curve data
         curve_data = bpy.data.curves.new("TaxiLineCurve", type="CURVE")
@@ -157,6 +178,7 @@ class TAXILINES_OT_draw_taxi_line(bpy.types.Operator):
                 self._curve_obj.select_set(True)
                 self._safe_mode_set(context, self._curve_obj, "OBJECT")
 
+            self._set_ui_state(context, active=False)
             return {"FINISHED"}
 
         # Undo last placed point (keep drawing).
@@ -216,6 +238,7 @@ class TAXILINES_OT_draw_taxi_line(bpy.types.Operator):
                 self._curve_obj.select_set(True)
                 self._safe_mode_set(context, self._curve_obj, "OBJECT")
 
+            self._set_ui_state(context, active=False)
             return {"FINISHED"}
 
         # Add point (Left Click)
@@ -237,6 +260,7 @@ class TAXILINES_OT_draw_taxi_line(bpy.types.Operator):
             if self._curve_obj and self._curve_obj.data and len(self._curve_obj.data.splines) > self._spline_index:
                 spline = self._curve_obj.data.splines[self._spline_index]
             if spline is None:
+                self._set_ui_state(context, active=False)
                 return {"CANCELLED"}
 
             points = spline.bezier_points

@@ -90,31 +90,68 @@ class TAXILINES_PT_main(bpy.types.Panel):
             layout.label(text=f"Reload: {_LAST_RELOAD_STATUS} @ {when}")
         layout.separator()
 
-        active = context.view_layer.objects.active
-        if active and active.type == "CURVE" and is_taxi_curve(active):
-            layout.prop(active, "tlg_line_width", text="Line Width")
-            layout.prop(active, "tlg_auto_smooth_handles", text="Auto Smooth Handles")
-            layout.separator()
-            layout.label(text="Preview Resolution")
-            layout.prop(active, "tlg_segments_mult", text="Segments")
-            layout.label(text="Curve is authoritative; mesh is for export.")
-            layout.operator("taxilines.finish_editing", text="Edit Mesh", icon="MESH_GRID")
-            layout.separator()
-        elif active and active.type == "MESH":
-            curve = get_source_curve_for_mesh(active)
-            if curve and is_taxi_curve(curve):
-                layout.label(text=f"Source Curve: {curve.name}")
-                layout.operator("taxilines.edit_path", text="Edit Curve", icon="CURVE_BEZCURVE")
-                layout.separator()
-        else:
-            layout.prop(context.scene, "tlg_default_width", text="Default Line Width")
-            layout.separator()
+        wm = context.window_manager
+        is_drawing = bool(getattr(wm, "tlg_ui_is_drawing_line", False))
+        is_resuming = bool(getattr(wm, "tlg_ui_is_resuming_line", False))
 
-        layout.operator("taxilines.draw_taxi_line", text="Create Taxi Line", icon="GREASEPENCIL")
-        layout.operator("taxilines.normalize_curve", icon="MOD_CURVE")
-        layout.operator("taxilines.recompute_handles", icon="HANDLE_AUTO")
+        active = context.view_layer.objects.active
+        active_taxi_curve = bool(active and active.type == "CURVE" and is_taxi_curve(active))
+
+        active_mesh_source_curve = None
+        if active and active.type == "MESH":
+            active_mesh_source_curve = get_source_curve_for_mesh(active)
+        active_mesh_has_taxi_curve = bool(active_mesh_source_curve and is_taxi_curve(active_mesh_source_curve))
+        is_edit_mesh_mode = bool(active and active.type == "MESH" and active_mesh_has_taxi_curve)
+
+        target_curve = active if active_taxi_curve else (active_mesh_source_curve if active_mesh_has_taxi_curve else None)
+
+        create_box = layout.box()
+        create_box.label(text="Create")
+
+        if target_curve is None:
+            create_box.prop(context.scene, "tlg_default_width", text="Default Line Width")
+            create_box.separator()
+
+        create_box.operator(
+            "taxilines.draw_taxi_line",
+            text="DRAWING LINE" if is_drawing else "Create Taxi Line",
+            icon="GREASEPENCIL",
+            depress=is_drawing,
+        )
+        if not is_edit_mesh_mode:
+            create_box.operator(
+                "taxilines.resume_taxi_line",
+                text="RESUMING LINE" if is_resuming else "Resume",
+                icon="PLAY",
+                depress=is_resuming,
+            )
+
+        if active_taxi_curve:
+            create_box.operator("taxilines.finish_editing", text="Edit Mesh", icon="MESH_GRID")
+        elif active_mesh_has_taxi_curve:
+            if not is_edit_mesh_mode:
+                create_box.label(text=f"Source Curve: {active_mesh_source_curve.name}")
+            create_box.operator("taxilines.edit_path", text="Edit Curve", icon="CURVE_BEZCURVE")
+
+        modifiers_box = layout.box()
+        modifiers_box.label(text="Modifiers")
+
+        if target_curve is not None:
+            modifiers_box.prop(target_curve, "tlg_line_width", text="Line Width")
+            modifiers_box.prop(target_curve, "tlg_segments_mult", text="Segments")
+            if not is_edit_mesh_mode:
+                modifiers_box.operator("taxilines.normalize_curve", text="Normalize Curve", icon="MOD_CURVE")
+                modifiers_box.operator("taxilines.recompute_handles", text="Recompute Taxi Handles", icon="HANDLE_AUTO")
+            if not is_edit_mesh_mode:
+                modifiers_box.prop(target_curve, "tlg_auto_smooth_handles", text="Auto Smooth Handles")
+            modifiers_box.separator()
+        elif not is_edit_mesh_mode:
+            modifiers_box.operator("taxilines.normalize_curve", text="Normalize Curve", icon="MOD_CURVE")
+            modifiers_box.operator("taxilines.recompute_handles", text="Recompute Taxi Handles", icon="HANDLE_AUTO")
+
         layout.operator("taxilines.debug_active", icon="CONSOLE")
         layout.separator()
         layout.label(text="Edit Mesh regenerates the export mesh.")
         layout.label(text="Left-click = add point on Z=0")
         layout.label(text="Enter/Right-click = finish")
+        layout.label(text="Resume: select end point in Edit Curve mode")

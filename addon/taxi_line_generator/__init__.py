@@ -17,6 +17,7 @@ from .operators.edit_path import TAXILINES_OT_edit_path, TAXILINES_OT_finish_edi
 from .operators.insert_point import TAXILINES_OT_insert_point_at_mouse, draw_insert_point_menu
 from .operators.normalize_curve import TAXILINES_OT_normalize_curve
 from .operators.recompute_handles import TAXILINES_OT_recompute_handles
+from .operators.resume_line_modal import TAXILINES_OT_resume_taxi_line
 from .name_sync import register_handlers as _register_handlers
 from .name_sync import unregister_handlers as _unregister_handlers
 from .properties import register_properties, unregister_properties
@@ -27,6 +28,7 @@ _addon_keymaps = []
 classes = (
     TAXILINES_OT_reload_addon,
     TAXILINES_OT_draw_taxi_line,
+    TAXILINES_OT_resume_taxi_line,
     TAXILINES_OT_bake_export_mesh,
     TAXILINES_OT_debug_active,
     TAXILINES_OT_edit_path,
