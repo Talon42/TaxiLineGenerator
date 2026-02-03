@@ -4,7 +4,7 @@ from .curve_utils import apply_taxi_handles_to_curve
 
 _TLG_PREVIEW_NODEGROUP_NAME = "TLG_TaxiLinePreview"
 _TLG_PREVIEW_MODIFIER_NAME = "TLG_TaxiLinePreview"
-_TLG_PREVIEW_NODEGROUP_VERSION = 6
+_TLG_PREVIEW_NODEGROUP_VERSION = 9
 
 _TLG_COLLECTION_ROOT_NAME = "Taxi Lines"
 _TLG_COLLECTION_CURVES_NAME = "EDIT - Curves"
@@ -157,13 +157,13 @@ def _ensure_preview_nodegroup():
     n_seg_len_max = nodes.new("ShaderNodeMath")
     n_seg_len_max.operation = "MAXIMUM"
     n_seg_len_max.location = (-200, -260)
-    n_seg_len_max.inputs[1].default_value = 0.02
+    n_seg_len_max.inputs[1].default_value = 0.5
 
     # Cap segment length so wide lines still get enough bevel at corners.
     n_seg_len_min = nodes.new("ShaderNodeMath")
     n_seg_len_min.operation = "MINIMUM"
     n_seg_len_min.location = (-40, -260)
-    n_seg_len_min.inputs[1].default_value = 0.02
+    n_seg_len_min.inputs[1].default_value = 0.5
 
     links.new(n_in.outputs["Width (m)"], n_seg_len_mul.inputs[0])
     links.new(n_seg_len_mul.outputs[0], n_seg_len_max.inputs[0])
