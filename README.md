@@ -31,6 +31,8 @@ Status: **In development** (tools and UI may change).
 3. Go to the **Taxi Lines** tab
 4. Open **Taxi Line Generator**
 
+![Taxi Line Generator UI Panel](screenshots/panel.jpg)
+
 ## Quick start (create a line)
 
 Important: points are placed on the **world Z=0 plane**.
@@ -43,6 +45,8 @@ Important: points are placed on the **world Z=0 plane**.
    - `Ctrl+Z` while drawing = remove the last placed point (keeps drawing active)
 
 This creates a **source curve** object (the editable "authoring" object) and a live preview setup.
+
+![Taxi Line Generator UI Panel](screenshots/curve.jpg)
 
 ## Editing workflow (Edit Curve vs Edit Mesh)
 
@@ -62,6 +66,9 @@ Each taxi line is managed as a linked set of objects (names typically end in `_S
 
 1. Select the taxi line curve (`*_SRC`) **or** select its export mesh (`*_MESH`)
 2. Click `Edit Mesh`
+
+![Taxi Line Generator UI Panel](screenshots/mesh.jpg)
+![Taxi Line Generator UI Panel](screenshots/texture.jpg)
 
 This will:
 
