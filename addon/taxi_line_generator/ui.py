@@ -94,6 +94,9 @@ class TAXILINES_PT_main(bpy.types.Panel):
         if active and active.type == "CURVE" and is_taxi_curve(active):
             layout.prop(active, "tlg_line_width", text="Line Width")
             layout.prop(active, "tlg_auto_smooth_handles", text="Auto Smooth Handles")
+            layout.separator()
+            layout.label(text="Preview Resolution")
+            layout.prop(active, "tlg_segments_mult", text="Segments")
             layout.label(text="Curve is authoritative; mesh is for export.")
             layout.operator("taxilines.finish_editing", text="Edit Mesh", icon="MESH_GRID")
             layout.separator()
@@ -105,7 +108,6 @@ class TAXILINES_PT_main(bpy.types.Panel):
                 layout.separator()
         else:
             layout.prop(context.scene, "tlg_default_width", text="Default Line Width")
-            layout.operator("taxilines.create_ribbon_mesh", text="Attach GN Preview", icon="GEOMETRY_NODES")
             layout.separator()
 
         layout.operator("taxilines.draw_taxi_line", text="Create Taxi Line", icon="GREASEPENCIL")

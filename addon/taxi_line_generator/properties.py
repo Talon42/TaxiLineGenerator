@@ -6,7 +6,7 @@ from .curve_utils import apply_taxi_handles_to_curve
 
 _TLG_PREVIEW_NODEGROUP_NAME = "TLG_TaxiLinePreview"
 _TLG_PREVIEW_MODIFIER_NAME = "TLG_TaxiLinePreview"
-_TLG_PREVIEW_NODEGROUP_VERSION = 9
+_TLG_PREVIEW_NODEGROUP_VERSION = 12
 
 _TLG_LINE_ID_KEY = "tlg_line_id"
 _TLG_LINE_ROLE_KEY = "tlg_line_role"
@@ -292,6 +292,8 @@ def _ensure_preview_nodegroup():
     ng.inputs.new("NodeSocketGeometry", "Geometry")
     ng.inputs.new("NodeSocketFloat", "Width (m)")
     ng.inputs["Width (m)"].default_value = 0.15
+    ng.inputs.new("NodeSocketFloat", "Segments Mult")
+    ng.inputs["Segments Mult"].default_value = 1.0
     ng.inputs.new("NodeSocketFloat", "UV U (m/tile)")
     ng.inputs["UV U (m/tile)"].default_value = 1.0
     ng.inputs.new("NodeSocketFloat", "UV V (m/tile)")
@@ -401,8 +403,22 @@ def _ensure_preview_nodegroup():
     links.new(n_in.outputs["Width (m)"], n_seg_len_mul.inputs[0])
     links.new(n_seg_len_mul.outputs[0], n_seg_len_max.inputs[0])
     links.new(n_seg_len_max.outputs[0], n_seg_len_min.inputs[0])
+
+    # User control: smaller segment length => more segments.
+    n_seg_mult_max = nodes.new("ShaderNodeMath")
+    n_seg_mult_max.operation = "MAXIMUM"
+    n_seg_mult_max.location = (120, -300)
+    n_seg_mult_max.inputs[1].default_value = 0.001
+
+    n_seg_len_div = nodes.new("ShaderNodeMath")
+    n_seg_len_div.operation = "DIVIDE"
+    n_seg_len_div.location = (280, -260)
+
+    links.new(n_in.outputs["Segments Mult"], n_seg_mult_max.inputs[0])
+    links.new(n_seg_len_min.outputs[0], n_seg_len_div.inputs[0])
+    links.new(n_seg_mult_max.outputs[0], n_seg_len_div.inputs[1])
     if "Length" in n_resample.inputs:
-        links.new(n_seg_len_min.outputs[0], n_resample.inputs["Length"])
+        links.new(n_seg_len_div.outputs[0], n_resample.inputs["Length"])
 
     # Curve parameterization for UV U: store length along spline to a named attribute on the curve.
     n_spline_param_curve = _nodes_new_first_available(
@@ -629,6 +645,7 @@ def ensure_taxi_preview(curve_obj, context=None):
     width_m = float(getattr(curve_obj, "tlg_line_width", 0.15))
 
     _set_modifier_input(mod, "Width (m)", width_m / scale_xy)
+    _set_modifier_input(mod, "Segments Mult", float(getattr(curve_obj, "tlg_segments_mult", 1.0)))
     _set_modifier_input(
         mod, "UV U (m/tile)", float(getattr(curve_obj, "tlg_uv_u_m_per_tile", 1.0)) / scale_xy
     )
@@ -858,6 +875,16 @@ def register_properties():
         update=_tlg_curve_settings_update,
     )
 
+    bpy.types.Object.tlg_segments_mult = bpy.props.FloatProperty(
+        name="Segments Mult",
+        description="Multiplier for mesh segment density (higher = smoother, heavier)",
+        default=1.0,
+        min=0.1,
+        soft_min=0.25,
+        soft_max=10.0,
+        update=_tlg_curve_settings_update,
+    )
+
     bpy.types.Object.tlg_show_curve_overlay = bpy.props.BoolProperty(
         name="Show Curve Overlay",
         description="Include the curve component in the GN output (may hide mesh preview on some Blender versions)",
@@ -896,6 +923,10 @@ def unregister_properties():
         pass
     try:
         del bpy.types.Object.tlg_uv_v_m_per_tile
+    except Exception:
+        pass
+    try:
+        del bpy.types.Object.tlg_segments_mult
     except Exception:
         pass
     try:

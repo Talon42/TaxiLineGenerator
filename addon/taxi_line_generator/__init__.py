@@ -11,7 +11,6 @@ bl_info = {
 import bpy
 
 from .operators.bake_export_mesh import TAXILINES_OT_bake_export_mesh
-from .operators.create_ribbon_mesh import TAXILINES_OT_create_ribbon_mesh
 from .operators.debug_info import TAXILINES_OT_debug_active
 from .operators.draw_line_modal import TAXILINES_OT_draw_taxi_line
 from .operators.edit_path import TAXILINES_OT_edit_path, TAXILINES_OT_finish_editing
@@ -28,7 +27,6 @@ _addon_keymaps = []
 classes = (
     TAXILINES_OT_reload_addon,
     TAXILINES_OT_draw_taxi_line,
-    TAXILINES_OT_create_ribbon_mesh,
     TAXILINES_OT_bake_export_mesh,
     TAXILINES_OT_debug_active,
     TAXILINES_OT_edit_path,
