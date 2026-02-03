@@ -6,7 +6,14 @@ _TLG_PREVIEW_NODEGROUP_NAME = "TLG_TaxiLinePreview"
 _TLG_PREVIEW_MODIFIER_NAME = "TLG_TaxiLinePreview"
 _TLG_PREVIEW_NODEGROUP_VERSION = 6
 
-_TLG_BAKED_COLLECTION_NAME = "TLG_Baked"
+_TLG_COLLECTION_ROOT_NAME = "Taxi Lines"
+_TLG_COLLECTION_CURVES_NAME = "EDIT - Curves"
+_TLG_COLLECTION_EXPORT_NAME = "EXPORT - Meshes"
+_TLG_COLLECTION_INTERNAL_NAME = "_INTERNAL - Base"
+
+# Legacy collection names (kept for migrating older files).
+_TLG_LEGACY_CURVES_COLLECTION_NAME = "TAXI_LINES"
+_TLG_LEGACY_BAKED_COLLECTION_NAME = "TLG_Baked"
 
 
 def _nodes_new_first_available(nodes, type_names):
@@ -419,16 +426,52 @@ def ensure_taxi_preview(curve_obj, context=None):
 
 
 def get_baked_collection(scene):
+    # Backward-compatible name: "baked" now means the export mesh collection under Taxi Lines.
+    return get_taxi_export_collection(scene)
+
+
+def _ensure_child_collection(parent, name):
+    if parent is None:
+        return None
+    col = bpy.data.collections.get(name)
+    if col is None:
+        col = bpy.data.collections.new(name)
+    try:
+        if col.name not in [c.name for c in parent.children]:
+            parent.children.link(col)
+    except Exception:
+        # Blender may throw if already linked or during restricted contexts.
+        pass
+    return col
+
+
+def get_taxi_root_collection(scene):
     if scene is None:
         return None
-    col = bpy.data.collections.get(_TLG_BAKED_COLLECTION_NAME)
-    if col is None:
-        col = bpy.data.collections.new(_TLG_BAKED_COLLECTION_NAME)
-        try:
-            scene.collection.children.link(col)
-        except Exception:
-            pass
-    return col
+    root = bpy.data.collections.get(_TLG_COLLECTION_ROOT_NAME)
+    if root is None:
+        root = bpy.data.collections.new(_TLG_COLLECTION_ROOT_NAME)
+    try:
+        if root.name not in [c.name for c in scene.collection.children]:
+            scene.collection.children.link(root)
+    except Exception:
+        pass
+    return root
+
+
+def get_taxi_curves_collection(scene):
+    root = get_taxi_root_collection(scene)
+    return _ensure_child_collection(root, _TLG_COLLECTION_CURVES_NAME)
+
+
+def get_taxi_export_collection(scene):
+    root = get_taxi_root_collection(scene)
+    return _ensure_child_collection(root, _TLG_COLLECTION_EXPORT_NAME)
+
+
+def get_taxi_internal_collection(scene):
+    root = get_taxi_root_collection(scene)
+    return _ensure_child_collection(root, _TLG_COLLECTION_INTERNAL_NAME)
 
 
 def get_baked_mesh_for_curve(curve_obj):
@@ -437,6 +480,17 @@ def get_baked_mesh_for_curve(curve_obj):
     baked_name = curve_obj.get("tlg_baked_mesh")
     if baked_name:
         obj = bpy.data.objects.get(baked_name)
+        if obj and obj.type == "MESH":
+            return obj
+    return None
+
+
+def get_base_mesh_for_curve(curve_obj):
+    if not curve_obj:
+        return None
+    base_name = curve_obj.get("tlg_base_mesh")
+    if base_name:
+        obj = bpy.data.objects.get(base_name)
         if obj and obj.type == "MESH":
             return obj
     return None
@@ -451,49 +505,9 @@ def _tlg_curve_settings_update(obj, context):
 
 
 def _tlg_view_mode_update(scene, context):
-    if scene is None:
-        return
-    mode = getattr(scene, "tlg_view_mode", "EDIT")
-    if context is None:
-        return
-
-    for obj in list(scene.objects):
-        if not is_taxi_curve(obj):
-            continue
-        baked = get_baked_mesh_for_curve(obj)
-
-        if mode == "EXPORT":
-            if baked is not None:
-                try:
-                    obj.hide_viewport = True
-                    obj.hide_select = True
-                except Exception:
-                    pass
-                try:
-                    baked.hide_viewport = False
-                    baked.hide_select = True
-                except Exception:
-                    pass
-            else:
-                # If no baked mesh exists yet, keep the curve visible so users don't
-                # end up with an "empty" scene when switching to Export Mode.
-                try:
-                    obj.hide_viewport = False
-                    obj.hide_select = False
-                except Exception:
-                    pass
-        else:
-            try:
-                obj.hide_viewport = False
-                obj.hide_select = False
-            except Exception:
-                pass
-            if baked is not None:
-                try:
-                    baked.hide_viewport = True
-                    baked.hide_select = True
-                except Exception:
-                    pass
+    # Legacy: older versions had a scene-level view mode toggle that hid/shows all taxi lines.
+    # The current workflow is per-line via "Edit Curve" / "Edit Mesh" operators, so this is a no-op.
+    return
 
 
 def register_properties():
@@ -601,5 +615,10 @@ __all__ = (
     "ensure_taxi_preview",
     "get_baked_collection",
     "get_baked_mesh_for_curve",
+    "get_base_mesh_for_curve",
+    "get_taxi_root_collection",
+    "get_taxi_curves_collection",
+    "get_taxi_export_collection",
+    "get_taxi_internal_collection",
     "is_taxi_curve",
 )

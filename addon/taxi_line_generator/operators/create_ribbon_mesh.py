@@ -1,6 +1,6 @@
 import bpy
 
-from ..properties import ensure_taxi_preview
+from ..properties import ensure_taxi_preview, get_taxi_curves_collection
 
 
 class TAXILINES_OT_create_ribbon_mesh(bpy.types.Operator):
@@ -21,6 +21,15 @@ class TAXILINES_OT_create_ribbon_mesh(bpy.types.Operator):
         for curve_obj in curves:
             curve_obj.tlg_line_width = float(width_m)
             ensure_taxi_preview(curve_obj, context=context)
+
+            # Keep taxi curves organized under the Taxi Lines authoring collection.
+            col = get_taxi_curves_collection(context.scene)
+            if col is not None:
+                try:
+                    if col not in curve_obj.users_collection:
+                        col.objects.link(curve_obj)
+                except Exception:
+                    pass
 
             created += 1
 

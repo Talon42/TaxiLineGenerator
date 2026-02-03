@@ -1,6 +1,15 @@
 import bpy
+import bmesh
 
-from ..properties import ensure_taxi_preview, get_baked_mesh_for_curve, is_taxi_curve
+from ..properties import (
+    ensure_taxi_preview,
+    get_base_mesh_for_curve,
+    get_baked_mesh_for_curve,
+    get_taxi_curves_collection,
+    get_taxi_export_collection,
+    get_taxi_internal_collection,
+    is_taxi_curve,
+)
 
 
 def _deselect_all(context):
@@ -44,84 +53,505 @@ def _get_mesh_from_curve(curve_obj):
     return get_baked_mesh_for_curve(curve_obj)
 
 
+def _iter_target_curves(context):
+    curves = []
+    seen = set()
+
+    for obj in list(getattr(context, "selected_objects", []) or []):
+        curve_obj = None
+        if getattr(obj, "type", None) == "CURVE":
+            curve_obj = obj
+        elif getattr(obj, "type", None) == "MESH":
+            curve_obj = _get_source_curve_from_mesh(obj)
+
+        if curve_obj is None:
+            continue
+        if not is_taxi_curve(curve_obj):
+            continue
+        if curve_obj.name in seen:
+            continue
+        seen.add(curve_obj.name)
+        curves.append(curve_obj)
+
+    if curves:
+        return curves
+
+    active = context.view_layer.objects.active if context and context.view_layer else None
+    if active is None:
+        return []
+    if active.type == "CURVE" and is_taxi_curve(active):
+        return [active]
+    if active.type == "MESH":
+        curve_obj = _get_source_curve_from_mesh(active)
+        if curve_obj and is_taxi_curve(curve_obj):
+            return [curve_obj]
+    return []
+
+
+def _link_obj_to_collection(obj, col):
+    if obj is None or col is None:
+        return
+    try:
+        if col not in obj.users_collection:
+            col.objects.link(obj)
+    except Exception:
+        pass
+
+
+def _unlink_obj_from_collection_by_name(obj, names):
+    if obj is None:
+        return
+    for col in list(getattr(obj, "users_collection", [])):
+        try:
+            if col and col.name in names:
+                col.objects.unlink(obj)
+        except Exception:
+            pass
+
+
+def _ensure_export_and_base_mesh_objs(context, curve_obj):
+    scene = getattr(context, "scene", None)
+    export_col = get_taxi_export_collection(scene)
+    curves_col = get_taxi_curves_collection(scene)
+    internal_col = get_taxi_internal_collection(scene)
+
+    # Ensure curve is linked into the authoring collection (helps keep Outliner clean).
+    _link_obj_to_collection(curve_obj, curves_col)
+
+    export_obj = get_baked_mesh_for_curve(curve_obj)
+    if export_obj is None:
+        name = f"{curve_obj.name}_MESH"
+        mesh = bpy.data.meshes.new(name)
+        export_obj = bpy.data.objects.new(name, mesh)
+        curve_obj["tlg_baked_mesh"] = export_obj.name
+        export_obj["tlg_source_curve"] = curve_obj.name
+        _link_obj_to_collection(export_obj, export_col)
+    else:
+        _link_obj_to_collection(export_obj, export_col)
+        try:
+            export_obj["tlg_source_curve"] = curve_obj.name
+        except Exception:
+            pass
+
+    base_obj = get_base_mesh_for_curve(curve_obj)
+    if base_obj is None:
+        name = f"{curve_obj.name}_BASE"
+        mesh = bpy.data.meshes.new(name)
+        base_obj = bpy.data.objects.new(name, mesh)
+        curve_obj["tlg_base_mesh"] = base_obj.name
+        base_obj["tlg_source_curve"] = curve_obj.name
+        _link_obj_to_collection(base_obj, internal_col)
+    else:
+        _link_obj_to_collection(base_obj, internal_col)
+        try:
+            base_obj["tlg_source_curve"] = curve_obj.name
+        except Exception:
+            pass
+
+    # Migrate out of legacy add-on collections if present (keeps Outliner tidy).
+    _unlink_obj_from_collection_by_name(curve_obj, {"TAXI_LINES"})
+    _unlink_obj_from_collection_by_name(export_obj, {"TLG_Baked"})
+
+    # Base mesh is internal: never selectable/visible.
+    try:
+        base_obj.hide_viewport = True
+        base_obj.hide_select = True
+        base_obj.hide_render = True
+    except Exception:
+        pass
+
+    return export_obj, base_obj
+
+
+def _replace_mesh_data(obj, new_mesh):
+    old_mesh = getattr(obj, "data", None)
+    obj.data = new_mesh
+    if old_mesh is not None:
+        try:
+            if old_mesh.users == 0:
+                bpy.data.meshes.remove(old_mesh)
+        except Exception:
+            pass
+
+
+def _mesh_new_from_curve(context, curve_obj):
+    depsgraph = context.evaluated_depsgraph_get()
+    eval_obj = curve_obj.evaluated_get(depsgraph)
+    return bpy.data.meshes.new_from_object(eval_obj, preserve_all_data_layers=True, depsgraph=depsgraph)
+
+
+def _uv_bbox(mesh, uv_layer_name="UVMap"):
+    if mesh is None:
+        return None
+    uv_layer = None
+    try:
+        uv_layer = mesh.uv_layers.get(uv_layer_name) if hasattr(mesh, "uv_layers") else None
+    except Exception:
+        uv_layer = None
+    if uv_layer is None:
+        return None
+    data = getattr(uv_layer, "data", None)
+    if not data:
+        return None
+    min_u = 1e30
+    min_v = 1e30
+    max_u = -1e30
+    max_v = -1e30
+    for uv in data:
+        try:
+            u = float(uv.uv.x)
+            v = float(uv.uv.y)
+        except Exception:
+            continue
+        if u < min_u:
+            min_u = u
+        if v < min_v:
+            min_v = v
+        if u > max_u:
+            max_u = u
+        if v > max_v:
+            max_v = v
+    if min_u > max_u or min_v > max_v:
+        return None
+    return (min_u, min_v, max_u, max_v)
+
+
+def _fit_uv_to_bbox(mesh, target_bbox, uv_layer_name="UVMap"):
+    if mesh is None or target_bbox is None:
+        return False
+    uv_layer = None
+    try:
+        uv_layer = mesh.uv_layers.get(uv_layer_name) if hasattr(mesh, "uv_layers") else None
+    except Exception:
+        uv_layer = None
+    if uv_layer is None:
+        return False
+
+    current_bbox = _uv_bbox(mesh, uv_layer_name=uv_layer_name)
+    if current_bbox is None:
+        return False
+
+    cmin_u, cmin_v, cmax_u, cmax_v = current_bbox
+    tmin_u, tmin_v, tmax_u, tmax_v = target_bbox
+
+    csize_u = cmax_u - cmin_u
+    csize_v = cmax_v - cmin_v
+    tsize_u = tmax_u - tmin_u
+    tsize_v = tmax_v - tmin_v
+    eps = 1e-12
+    if abs(csize_u) <= eps or abs(csize_v) <= eps:
+        return False
+
+    su = tsize_u / csize_u
+    sv = tsize_v / csize_v
+
+    for uv in uv_layer.data:
+        uv.uv.x = (uv.uv.x - cmin_u) * su + tmin_u
+        uv.uv.y = (uv.uv.y - cmin_v) * sv + tmin_v
+    return True
+
+
+def _follow_active_quads_unwrap(context, mesh_obj, uv_layer_name="UVMap"):
+    if context is None or mesh_obj is None or mesh_obj.type != "MESH":
+        return False
+
+    mesh = mesh_obj.data
+    if mesh is None or not hasattr(mesh, "uv_layers"):
+        return False
+
+    try:
+        uv_layer = mesh.uv_layers.get(uv_layer_name) or mesh.uv_layers.new(name=uv_layer_name)
+        mesh.uv_layers.active = uv_layer
+    except Exception:
+        pass
+
+    _deselect_all(context)
+    mesh_obj.select_set(True)
+    context.view_layer.objects.active = mesh_obj
+
+    _safe_mode_set(context, mesh_obj, "OBJECT")
+    _safe_mode_set(context, mesh_obj, "EDIT")
+
+    try:
+        with context.temp_override(
+            object=mesh_obj,
+            active_object=mesh_obj,
+            selected_objects=[mesh_obj],
+            selected_editable_objects=[mesh_obj],
+        ):
+            bm = bmesh.from_edit_mesh(mesh)
+            if not bm.faces:
+                return False
+
+            # Follow Active Quads uses the "active" face as the reference. Ensure the mesh has
+            # a valid active face in selection history (last selected), otherwise Blender can
+            # fall back to producing stacked UVs.
+            best_face = None
+            best_boundary_edges = -1
+            for f in bm.faces:
+                boundary_edges = 0
+                for e in f.edges:
+                    try:
+                        if e.is_boundary:
+                            boundary_edges += 1
+                    except Exception:
+                        pass
+                if boundary_edges > best_boundary_edges:
+                    best_boundary_edges = boundary_edges
+                    best_face = f
+            if best_face is None:
+                best_face = bm.faces[0]
+
+            bpy.ops.mesh.select_all(action="DESELECT")
+            for f in bm.faces:
+                f.select_set(False)
+            best_face.select_set(True)
+            bm.faces.active = best_face
+            try:
+                bm.select_history.clear()
+                bm.select_history.add(best_face)
+            except Exception:
+                pass
+            bmesh.update_edit_mesh(mesh, loop_triangles=False, destructive=False)
+
+            # Seed the active face UVs so Follow Active Quads has a well-defined reference.
+            try:
+                bpy.ops.uv.reset()
+            except Exception:
+                pass
+
+            bpy.ops.mesh.select_all(action="SELECT")
+            bm = bmesh.from_edit_mesh(mesh)
+            try:
+                bm.faces.active = best_face
+            except Exception:
+                try:
+                    bm.faces.active = bm.faces[0]
+                except Exception:
+                    pass
+            try:
+                bm.select_history.clear()
+                bm.select_history.add(bm.faces.active)
+            except Exception:
+                pass
+            bmesh.update_edit_mesh(mesh, loop_triangles=False, destructive=False)
+
+            try:
+                bpy.ops.uv.follow_active_quads(mode="LENGTH_AVERAGE")
+            except Exception:
+                try:
+                    bpy.ops.uv.follow_active_quads(mode="EVEN")
+                except Exception:
+                    bpy.ops.uv.follow_active_quads()
+    except Exception:
+        return False
+
+    return True
+
+
 class TAXILINES_OT_edit_path(bpy.types.Operator):
     bl_idname = "taxilines.edit_path"
-    bl_label = "Edit Mode (Curve)"
-    bl_description = "Show the editable curve with live GN preview (hide baked export mesh)"
+    bl_label = "Edit Curve"
+    bl_description = "Edit the source curve (hide/lock the export mesh)"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
+        curves = _iter_target_curves(context)
+        if not curves:
+            self.report({"ERROR"}, "Select a Taxi Line curve or its export mesh.")
+            return {"CANCELLED"}
+
+        # Determine the active curve to enter Edit Mode on.
         active = context.view_layer.objects.active
-        if active is None:
-            self.report({"ERROR"}, "No active object.")
-            return {"CANCELLED"}
+        active_curve = None
+        if active is not None:
+            if active.type == "CURVE":
+                active_curve = active
+            elif active.type == "MESH":
+                active_curve = _get_source_curve_from_mesh(active)
+        if active_curve is None or not is_taxi_curve(active_curve):
+            active_curve = curves[0]
 
-        if active.type == "CURVE":
-            curve_obj = active
-        elif active.type == "MESH":
-            curve_obj = _get_source_curve_from_mesh(active)
-        else:
-            curve_obj = None
+        for curve_obj in curves:
+            ensure_taxi_preview(curve_obj, context=context)
+            export_obj, base_obj = _ensure_export_and_base_mesh_objs(context, curve_obj)
 
-        if curve_obj is None:
-            self.report({"ERROR"}, "Active object must be a Taxi Line curve or its baked mesh.")
-            return {"CANCELLED"}
+            # Curve mode: curve is visible/selectable; meshes are hidden/locked.
+            try:
+                curve_obj.hide_viewport = False
+                curve_obj.hide_select = False
+                curve_obj.hide_render = True
+                curve_obj.display_type = "WIRE"
+                curve_obj.show_in_front = True
+            except Exception:
+                pass
+            try:
+                export_obj.hide_viewport = True
+                export_obj.hide_select = True
+            except Exception:
+                pass
+            try:
+                base_obj.hide_viewport = True
+                base_obj.hide_select = True
+            except Exception:
+                pass
 
-        if not is_taxi_curve(curve_obj):
-            curve_obj["tlg_is_taxi_line"] = True
-
-        try:
-            context.scene.tlg_view_mode = "EDIT"
-        except Exception:
-            pass
-        ensure_taxi_preview(curve_obj, context=context)
-
-        # Make curve active before any mode switching.
         _deselect_all(context)
-        curve_obj.select_set(True)
-        context.view_layer.objects.active = curve_obj
+        for curve_obj in curves:
+            try:
+                curve_obj.select_set(True)
+            except Exception:
+                pass
+        context.view_layer.objects.active = active_curve
 
-        _safe_mode_set(context, curve_obj, "OBJECT")
-
-        _safe_mode_set(context, curve_obj, "EDIT")
-
+        _safe_mode_set(context, active_curve, "OBJECT")
+        _safe_mode_set(context, active_curve, "EDIT")
         return {"FINISHED"}
 
 
 class TAXILINES_OT_finish_editing(bpy.types.Operator):
     bl_idname = "taxilines.finish_editing"
-    bl_label = "Export Mode (Baked)"
-    bl_description = "Show the baked export mesh (curve hidden/locked)"
+    bl_label = "Edit Mesh"
+    bl_description = "Generate/update the export mesh from the curve, unwrap UVs, then edit the mesh"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
+        curves = _iter_target_curves(context)
+        if not curves:
+            self.report({"ERROR"}, "Select a Taxi Line curve or its export mesh.")
+            return {"CANCELLED"}
+
         active = context.view_layer.objects.active
-        if active is None:
-            self.report({"ERROR"}, "No active object.")
+        active_curve = None
+        if active is not None:
+            if active.type == "CURVE":
+                active_curve = active
+            elif active.type == "MESH":
+                active_curve = _get_source_curve_from_mesh(active)
+        if active_curve is None or not is_taxi_curve(active_curve):
+            active_curve = curves[0]
+
+        export_objs = []
+        any_failed = False
+        any_unwrap_failed = False
+
+        for curve_obj in curves:
+            ensure_taxi_preview(curve_obj, context=context)
+            export_obj, base_obj = _ensure_export_and_base_mesh_objs(context, curve_obj)
+
+            old_export_mesh = getattr(export_obj, "data", None)
+            old_base_mesh = getattr(base_obj, "data", None)
+
+            old_uv_bbox = _uv_bbox(old_export_mesh, uv_layer_name="UVMap")
+            old_materials = []
+            try:
+                if old_export_mesh is not None and hasattr(old_export_mesh, "materials"):
+                    old_materials = list(old_export_mesh.materials)
+            except Exception:
+                old_materials = []
+
+            _safe_mode_set(context, curve_obj, "OBJECT")
+
+            try:
+                new_base_mesh = _mesh_new_from_curve(context, curve_obj)
+            except Exception:
+                any_failed = True
+                continue
+
+            new_export_mesh = new_base_mesh.copy()
+
+            try:
+                can_apply_deltas = (
+                    old_export_mesh is not None
+                    and old_base_mesh is not None
+                    and len(old_export_mesh.vertices) == len(old_base_mesh.vertices)
+                    and len(new_export_mesh.vertices) == len(old_base_mesh.vertices)
+                )
+            except Exception:
+                can_apply_deltas = False
+
+            if can_apply_deltas:
+                try:
+                    for i, v in enumerate(new_export_mesh.vertices):
+                        v.co = v.co + (old_export_mesh.vertices[i].co - old_base_mesh.vertices[i].co)
+                except Exception:
+                    pass
+
+            try:
+                new_export_mesh.materials.clear()
+            except Exception:
+                pass
+            for mat in old_materials:
+                if mat is None:
+                    continue
+                try:
+                    new_export_mesh.materials.append(mat)
+                except Exception:
+                    pass
+
+            _replace_mesh_data(base_obj, new_base_mesh)
+            _replace_mesh_data(export_obj, new_export_mesh)
+
+            try:
+                export_obj.matrix_world = curve_obj.matrix_world
+                base_obj.matrix_world = curve_obj.matrix_world
+            except Exception:
+                pass
+
+            try:
+                curve_obj.hide_viewport = True
+                curve_obj.hide_select = True
+            except Exception:
+                pass
+            try:
+                export_obj.hide_viewport = False
+                export_obj.hide_select = False
+                export_obj.hide_render = False
+            except Exception:
+                pass
+            try:
+                base_obj.hide_viewport = True
+                base_obj.hide_select = True
+                base_obj.hide_render = True
+            except Exception:
+                pass
+
+            ok_unwrap = _follow_active_quads_unwrap(context, export_obj, uv_layer_name="UVMap")
+            if not ok_unwrap:
+                any_unwrap_failed = True
+            if ok_unwrap and old_uv_bbox is not None:
+                try:
+                    _fit_uv_to_bbox(export_obj.data, old_uv_bbox, uv_layer_name="UVMap")
+                except Exception:
+                    pass
+
+            export_objs.append(export_obj)
+
+        if not export_objs:
+            self.report({"ERROR"}, "No export meshes were generated.")
             return {"CANCELLED"}
 
-        if active.type == "CURVE":
-            curve_obj = active
-        elif active.type == "MESH":
-            curve_obj = _get_source_curve_from_mesh(active)
-        else:
-            curve_obj = None
-
-        if curve_obj is None:
-            self.report({"ERROR"}, "Active object must be a Taxi Line curve or its baked mesh.")
-            return {"CANCELLED"}
-
-        mesh_obj = _get_mesh_from_curve(curve_obj)
-        if mesh_obj is None:
-            self.report({"WARNING"}, "No baked mesh found for this curve. Use Bake first.")
-            return {"CANCELLED"}
-
-        try:
-            context.scene.tlg_view_mode = "EXPORT"
-        except Exception:
-            pass
-
+        # Select results and make the active one match the previously active curve (if possible).
         _deselect_all(context)
-        mesh_obj.select_set(True)
-        context.view_layer.objects.active = mesh_obj
+        active_export = export_objs[0]
+        for export_obj in export_objs:
+            try:
+                export_obj.select_set(True)
+            except Exception:
+                pass
+            if export_obj.get("tlg_source_curve") == getattr(active_curve, "name", None):
+                active_export = export_obj
+        context.view_layer.objects.active = active_export
+
+        # For single-object workflows, drop into Edit Mode on the export mesh.
+        _safe_mode_set(context, active_export, "OBJECT")
+        if len(export_objs) == 1:
+            _safe_mode_set(context, active_export, "EDIT")
+
+        if any_failed:
+            self.report({"WARNING"}, "Some selected taxi lines failed to generate.")
+        elif any_unwrap_failed:
+            self.report({"WARNING"}, "Export mesh updated, but UV unwrap failed on one or more lines.")
+        else:
+            self.report({"INFO"}, "Export mesh updated from curve.")
         return {"FINISHED"}

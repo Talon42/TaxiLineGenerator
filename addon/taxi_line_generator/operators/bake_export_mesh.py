@@ -140,39 +140,22 @@ class TAXILINES_OT_bake_export_mesh(bpy.types.Operator):
             _copy_material_slots_from_curve(curve_obj, baked_obj.data)
 
             try:
-                baked_obj.hide_select = True
+                # In the new workflow the export mesh is meant to be editable/selectable.
+                baked_obj.hide_select = False
                 baked_obj.hide_render = False
             except Exception:
                 pass
 
-            # Apply visibility based on current scene mode.
-            if getattr(context.scene, "tlg_view_mode", "EDIT") == "EXPORT":
-                try:
-                    baked_obj.hide_viewport = False
-                except Exception:
-                    pass
-            else:
-                try:
-                    baked_obj.hide_viewport = True
-                except Exception:
-                    pass
+            # Keep baked meshes hidden by default; "Edit Mesh" will show/select them.
+            try:
+                baked_obj.hide_viewport = True
+            except Exception:
+                pass
 
             baked_count += 1
             last_baked_obj = baked_obj
 
-        # Make the result obvious for single-bake workflows.
-        if baked_count == 1 and last_baked_obj is not None:
-            try:
-                context.scene.tlg_view_mode = "EXPORT"
-            except Exception:
-                pass
-            try:
-                for obj in list(context.selected_objects):
-                    obj.select_set(False)
-                last_baked_obj.select_set(True)
-                context.view_layer.objects.active = last_baked_obj
-            except Exception:
-                pass
+        # Keep selection unchanged; "Edit Mesh" controls mode switching.
 
         self.report({"INFO"}, f"Baked {baked_count} export mesh(es).")
         return {"FINISHED"}

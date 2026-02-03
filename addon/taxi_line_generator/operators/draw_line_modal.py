@@ -1,7 +1,7 @@
 import bpy
 from bpy_extras import view3d_utils
 
-from ..properties import ensure_taxi_preview
+from ..properties import ensure_taxi_preview, get_taxi_curves_collection
 from ..curve_utils import apply_taxi_handles_to_spline
 
 
@@ -44,13 +44,6 @@ class TAXILINES_OT_draw_taxi_line(bpy.types.Operator):
     _spline_index = 0
     _has_first_point = False
 
-    def _ensure_collection(self, context, name):
-        col = bpy.data.collections.get(name)
-        if col is None:
-            col = bpy.data.collections.new(name)
-            context.scene.collection.children.link(col)
-        return col
-
     def _safe_mode_set(self, context, obj, mode):
         if obj is None:
             return
@@ -77,10 +70,14 @@ class TAXILINES_OT_draw_taxi_line(bpy.types.Operator):
         # Create object
         curve_obj = bpy.data.objects.new("TaxiLineCurve_SRC", curve_data)
 
-        # Main taxi lines collection (curve is the primary editable object).
-        col = self._ensure_collection(context, "TAXI_LINES")
-
-        col.objects.link(curve_obj)
+        # Add to the Taxi Lines authoring collection (curve is the primary editable object).
+        col = get_taxi_curves_collection(context.scene)
+        if col is None:
+            col = context.scene.collection
+        try:
+            col.objects.link(curve_obj)
+        except Exception:
+            pass
         curve_obj.hide_viewport = False
         curve_obj.hide_select = False
         curve_obj.hide_render = True
@@ -98,11 +95,6 @@ class TAXILINES_OT_draw_taxi_line(bpy.types.Operator):
         if not hasattr(curve_obj, "tlg_uv_v_m_per_tile"):
             curve_obj.tlg_uv_v_m_per_tile = 1.0
 
-        # Ensure curves stay visible while authoring.
-        try:
-            context.scene.tlg_view_mode = "EDIT"
-        except Exception:
-            pass
         ensure_taxi_preview(curve_obj, context=context)
 
         # Make active

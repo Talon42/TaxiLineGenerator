@@ -90,38 +90,27 @@ class TAXILINES_PT_main(bpy.types.Panel):
             layout.label(text=f"Reload: {_LAST_RELOAD_STATUS} @ {when}")
         layout.separator()
 
-        if hasattr(context.scene, "tlg_view_mode"):
-            layout.prop(context.scene, "tlg_view_mode", expand=True)
-            layout.separator()
-
         active = context.view_layer.objects.active
         if active and active.type == "CURVE" and is_taxi_curve(active):
             layout.prop(active, "tlg_line_width", text="Line Width")
             layout.prop(active, "tlg_auto_smooth_handles", text="Auto Smooth Handles")
-            layout.prop(active, "tlg_uv_u_m_per_tile", text="UV U (m/tile)")
-            layout.prop(active, "tlg_uv_v_m_per_tile", text="UV V (m/tile)")
-            row = layout.row()
-            row.enabled = False
-            row.prop(active, "tlg_show_curve_overlay", text="Show Curve Overlay (disabled)")
-            layout.label(text="Preview shows in Object Mode (Tab).")
-
-            baked = get_baked_mesh_for_curve(active)
-            layout.operator(
-                "taxilines.bake_export_mesh",
-                text="Rebake Export Mesh" if baked is not None else "Bake Export Mesh",
-                icon="FILE_TICK",
-            )
-            layout.operator("taxilines.create_ribbon_mesh", text="Rebuild GN Preview", icon="GEOMETRY_NODES")
+            layout.label(text="Curve is authoritative; mesh is for export.")
+            layout.operator("taxilines.finish_editing", text="Edit Mesh", icon="MESH_GRID")
+            layout.separator()
+        elif active and active.type == "MESH" and active.get("tlg_source_curve"):
+            layout.label(text=f"Source Curve: {active.get('tlg_source_curve')}")
+            layout.operator("taxilines.edit_path", text="Edit Curve", icon="CURVE_BEZCURVE")
+            layout.separator()
         else:
             layout.prop(context.scene, "tlg_default_width", text="Default Line Width")
-            layout.operator("taxilines.create_ribbon_mesh", icon="GEOMETRY_NODES")
-        layout.separator()
+            layout.operator("taxilines.create_ribbon_mesh", text="Attach GN Preview", icon="GEOMETRY_NODES")
+            layout.separator()
 
         layout.operator("taxilines.draw_taxi_line", text="Create Taxi Line", icon="GREASEPENCIL")
         layout.operator("taxilines.normalize_curve", icon="MOD_CURVE")
         layout.operator("taxilines.recompute_handles", icon="HANDLE_AUTO")
         layout.operator("taxilines.debug_active", icon="CONSOLE")
         layout.separator()
-        layout.label(text="Curve is authoritative; bake for export.")
+        layout.label(text="Edit Mesh regenerates the export mesh.")
         layout.label(text="Left-click = add point on Z=0")
         layout.label(text="Enter/Right-click = finish")
