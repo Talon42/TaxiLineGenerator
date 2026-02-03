@@ -12,6 +12,20 @@ from ..properties import (
 )
 
 
+def _debug_uv(context, msg):
+    try:
+        scene = getattr(context, "scene", None) if context else None
+        enabled = bool(scene and scene.get("tlg_debug_uv"))
+    except Exception:
+        enabled = False
+    if not enabled:
+        return
+    try:
+        print("[TLG UV DEBUG] " + str(msg))
+    except Exception:
+        pass
+
+
 def _deselect_all(context):
     for obj in list(context.selected_objects):
         obj.select_set(False)
@@ -216,6 +230,131 @@ def _uv_bbox(mesh, uv_layer_name="UVMap"):
     return (min_u, min_v, max_u, max_v)
 
 
+def _sanitize_uv_bbox(value):
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)) and len(value) == 4:
+        try:
+            return (
+                float(value[0]),
+                float(value[1]),
+                float(value[2]),
+                float(value[3]),
+            )
+        except Exception:
+            return None
+    return None
+
+
+def _active_uv_layer_name(mesh_obj):
+    if mesh_obj is None or getattr(mesh_obj, "type", None) != "MESH":
+        return None
+    mesh = getattr(mesh_obj, "data", None)
+    if mesh is None or not hasattr(mesh, "uv_layers"):
+        return None
+    try:
+        uv_layer = mesh.uv_layers.active
+        if uv_layer is None:
+            return None
+        return str(getattr(uv_layer, "name", None) or "") or None
+    except Exception:
+        return None
+
+
+def _copy_uv_layer_by_index(src_mesh, dst_mesh, uv_layer_name):
+    if src_mesh is None or dst_mesh is None or not uv_layer_name:
+        return False
+    if not hasattr(src_mesh, "uv_layers") or not hasattr(dst_mesh, "uv_layers"):
+        return False
+
+    try:
+        src_layer = src_mesh.uv_layers.get(uv_layer_name)
+    except Exception:
+        src_layer = None
+    if src_layer is None:
+        return False
+
+    try:
+        dst_layer = dst_mesh.uv_layers.get(uv_layer_name) or dst_mesh.uv_layers.new(name=uv_layer_name)
+        dst_mesh.uv_layers.active = dst_layer
+    except Exception:
+        return False
+
+    try:
+        src_polys = list(src_mesh.polygons)
+        dst_polys = list(dst_mesh.polygons)
+    except Exception:
+        return False
+    if len(src_polys) != len(dst_polys):
+        return False
+    try:
+        for sp, dp in zip(src_polys, dst_polys):
+            if int(getattr(sp, "loop_total", -1)) != int(getattr(dp, "loop_total", -1)):
+                return False
+    except Exception:
+        return False
+
+    try:
+        src_data = src_layer.data
+        dst_data = dst_layer.data
+        if len(src_data) != len(dst_data):
+            return False
+        for i in range(len(dst_data)):
+            dst_data[i].uv = src_data[i].uv
+    except Exception:
+        return False
+
+    return True
+
+
+def _get_curve_saved_uv_bbox(curve_obj):
+    if curve_obj is None:
+        return None
+    try:
+        return _sanitize_uv_bbox(curve_obj.get("tlg_export_uv_bbox"))
+    except Exception:
+        return None
+
+
+def _get_curve_saved_uv_layer_name(curve_obj):
+    if curve_obj is None:
+        return None
+    try:
+        v = curve_obj.get("tlg_export_uv_layer")
+    except Exception:
+        v = None
+    if not v:
+        return None
+    try:
+        v = str(v)
+    except Exception:
+        return None
+    return v or None
+
+
+def _set_curve_saved_uv_bbox(curve_obj, bbox):
+    if curve_obj is None or bbox is None:
+        return False
+    bbox = _sanitize_uv_bbox(bbox)
+    if bbox is None:
+        return False
+    try:
+        curve_obj["tlg_export_uv_bbox"] = [bbox[0], bbox[1], bbox[2], bbox[3]]
+        return True
+    except Exception:
+        return False
+
+
+def _set_curve_saved_uv_layer_name(curve_obj, name):
+    if curve_obj is None or not name:
+        return False
+    try:
+        curve_obj["tlg_export_uv_layer"] = str(name)
+        return True
+    except Exception:
+        return False
+
+
 def _fit_uv_to_bbox(mesh, target_bbox, uv_layer_name="UVMap"):
     if mesh is None or target_bbox is None:
         return False
@@ -356,13 +495,21 @@ class TAXILINES_OT_edit_path(bpy.types.Operator):
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
+        # If we're leaving a mesh Edit Mode session, force a flush of BMesh edits (including UVs)
+        # before we hide/lock the export mesh. Without this, UV changes can appear to "reset"
+        # when switching back to Edit Mesh later.
+        active = context.view_layer.objects.active if context and context.view_layer else None
+        invoked_from_mesh = bool(active and getattr(active, "type", None) == "MESH")
+        if invoked_from_mesh:
+            _debug_uv(context, f"edit_path: invoked_from_mesh active={active.name if active else None} mode={getattr(context, 'mode', '?')}")
+            _safe_mode_set(context, active, "OBJECT")
+
         curves = _iter_target_curves(context)
         if not curves:
             self.report({"ERROR"}, "Select a Taxi Line curve or its export mesh.")
             return {"CANCELLED"}
 
         # Determine the active curve to enter Edit Mode on.
-        active = context.view_layer.objects.active
         active_curve = None
         if active is not None:
             if active.type == "CURVE":
@@ -375,6 +522,23 @@ class TAXILINES_OT_edit_path(bpy.types.Operator):
         for curve_obj in curves:
             ensure_taxi_preview(curve_obj, context=context)
             export_obj, base_obj = _ensure_export_and_base_mesh_objs(context, curve_obj)
+
+            if invoked_from_mesh:
+                uv_name = _active_uv_layer_name(export_obj) or "UVMap"
+                try:
+                    bbox = _uv_bbox(getattr(export_obj, "data", None), uv_layer_name=uv_name)
+                except Exception:
+                    bbox = None
+                if bbox is not None:
+                    _debug_uv(
+                        context, f"edit_path: save curve={curve_obj.name} export={export_obj.name} uv={uv_name} bbox={bbox}"
+                    )
+                    _set_curve_saved_uv_layer_name(curve_obj, uv_name)
+                    _set_curve_saved_uv_bbox(curve_obj, bbox)
+                else:
+                    _debug_uv(
+                        context, f"edit_path: save curve={curve_obj.name} export={export_obj.name} uv={uv_name} bbox=None"
+                    )
 
             # Curve mode: curve is visible/selectable; meshes are hidden/locked.
             try:
@@ -442,7 +606,21 @@ class TAXILINES_OT_finish_editing(bpy.types.Operator):
             old_export_mesh = getattr(export_obj, "data", None)
             old_base_mesh = getattr(base_obj, "data", None)
 
-            old_uv_bbox = _uv_bbox(old_export_mesh, uv_layer_name="UVMap")
+            uv_layer_name = _get_curve_saved_uv_layer_name(curve_obj)
+            if not uv_layer_name and old_export_mesh is not None and hasattr(old_export_mesh, "uv_layers"):
+                try:
+                    uv_layer_name = getattr(old_export_mesh.uv_layers.active, "name", None)
+                except Exception:
+                    uv_layer_name = None
+            uv_layer_name = uv_layer_name or "UVMap"
+
+            saved_uv_bbox = _get_curve_saved_uv_bbox(curve_obj)
+            old_uv_bbox = _uv_bbox(old_export_mesh, uv_layer_name=uv_layer_name)
+            target_uv_bbox = saved_uv_bbox or old_uv_bbox
+            _debug_uv(
+                context,
+                f"finish_editing: curve={curve_obj.name} export={export_obj.name} uv={uv_layer_name} saved={saved_uv_bbox} old={old_uv_bbox} target={target_uv_bbox}",
+            )
             old_materials = []
             try:
                 if old_export_mesh is not None and hasattr(old_export_mesh, "materials"):
@@ -489,6 +667,15 @@ class TAXILINES_OT_finish_editing(bpy.types.Operator):
                 except Exception:
                     pass
 
+            # Preserve UVs exactly when topology matches (most common when toggling Curve <-> Mesh
+            # without changing curve point counts). This avoids any unwrap/fit churn.
+            uv_copied = False
+            try:
+                uv_copied = _copy_uv_layer_by_index(old_export_mesh, new_export_mesh, uv_layer_name)
+            except Exception:
+                uv_copied = False
+            _debug_uv(context, f"finish_editing: uv_copied={uv_copied}")
+
             _replace_mesh_data(base_obj, new_base_mesh)
             _replace_mesh_data(export_obj, new_export_mesh)
 
@@ -516,14 +703,40 @@ class TAXILINES_OT_finish_editing(bpy.types.Operator):
             except Exception:
                 pass
 
-            ok_unwrap = _follow_active_quads_unwrap(context, export_obj, uv_layer_name="UVMap")
-            if not ok_unwrap:
-                any_unwrap_failed = True
-            if ok_unwrap and old_uv_bbox is not None:
+            ok_unwrap = True
+            if not uv_copied:
+                ok_unwrap = _follow_active_quads_unwrap(context, export_obj, uv_layer_name=uv_layer_name)
+                if not ok_unwrap:
+                    any_unwrap_failed = True
+
+                # UV ops run in Edit Mode (BMesh). Switch back to Object Mode to flush results
+                # onto the Mesh datablock before applying bbox fitting.
+                _safe_mode_set(context, export_obj, "OBJECT")
+
+            # Preserve the user's last UV scale/offset across regenerations.
+            # Prefer the bbox saved when leaving Edit Mesh, then fall back to the previous mesh bbox.
+            applied = False
+            if target_uv_bbox is not None:
                 try:
-                    _fit_uv_to_bbox(export_obj.data, old_uv_bbox, uv_layer_name="UVMap")
+                    applied = _fit_uv_to_bbox(export_obj.data, target_uv_bbox, uv_layer_name=uv_layer_name)
                 except Exception:
-                    pass
+                    applied = False
+            _debug_uv(
+                context,
+                f"finish_editing: unwrap_ok={ok_unwrap} fit_applied={applied} new_bbox={_uv_bbox(getattr(export_obj, 'data', None), uv_layer_name=uv_layer_name)}",
+            )
+            if applied and target_uv_bbox is not None:
+                _set_curve_saved_uv_layer_name(curve_obj, uv_layer_name)
+                _set_curve_saved_uv_bbox(curve_obj, target_uv_bbox)
+            elif uv_copied:
+                # If we copied UVs exactly, treat the copied bbox as authoritative.
+                try:
+                    copied_bbox = _uv_bbox(getattr(export_obj, "data", None), uv_layer_name=uv_layer_name)
+                except Exception:
+                    copied_bbox = None
+                if copied_bbox is not None:
+                    _set_curve_saved_uv_layer_name(curve_obj, uv_layer_name)
+                    _set_curve_saved_uv_bbox(curve_obj, copied_bbox)
 
             export_objs.append(export_obj)
 
