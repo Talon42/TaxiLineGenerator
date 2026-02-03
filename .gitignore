@@ -11,5 +11,6 @@ __pycache__/
 #msfs exporter
 io_scene_gltf2_msfs/
 
-AGENTS.MD
-TaxiLineGenerator.code-workspace
+# Local editor and project files
+*.code-workspace
+AGENTS.md
