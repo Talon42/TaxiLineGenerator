@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Taxi Line Generator",
     "author": "Fox Two Models",
-    "version": (0, 0, 1),
+    "version": (0, 1, 0),
     "blender": (3, 6, 0),
     "location": "View3D > Sidebar > Taxi Lines",
     "description": "Create airport taxi line markings (in development).",
