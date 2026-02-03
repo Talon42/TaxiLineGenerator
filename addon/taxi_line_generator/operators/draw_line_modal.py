@@ -1,7 +1,7 @@
 import bpy
 from bpy_extras import view3d_utils
 
-from ..properties import _ensure_ribbon_mesh_modifier, _set_modifier_input
+from ..properties import ensure_taxi_preview
 from ..curve_utils import apply_taxi_handles_to_spline
 
 
@@ -43,7 +43,6 @@ class TAXILINES_OT_draw_taxi_line(bpy.types.Operator):
     _curve_obj = None
     _spline_index = 0
     _has_first_point = False
-    _mesh_obj = None
 
     def _ensure_collection(self, context, name):
         col = bpy.data.collections.get(name)
@@ -87,21 +86,24 @@ class TAXILINES_OT_draw_taxi_line(bpy.types.Operator):
         curve_obj.hide_render = True
         curve_obj.display_type = "WIRE"
         curve_obj.show_in_front = True
-
-        mesh_data = bpy.data.meshes.new("TaxiLineRibbon")
-        mesh_obj = bpy.data.objects.new("TaxiLineRibbon", mesh_data)
-        col.objects.link(mesh_obj)
-        mesh_obj.hide_select = True
-
-        mod = _ensure_ribbon_mesh_modifier(mesh_obj)
-        _set_modifier_input(mod, "Source Curve", curve_obj)
+        try:
+            curve_obj.data.show_handles = True
+        except Exception:
+            pass
 
         width_m = getattr(context.scene, "tlg_default_width", 0.15)
         curve_obj.tlg_line_width = float(width_m)
-        _set_modifier_input(mod, "Width", float(curve_obj.tlg_line_width))
+        if not hasattr(curve_obj, "tlg_uv_u_m_per_tile"):
+            curve_obj.tlg_uv_u_m_per_tile = 1.0
+        if not hasattr(curve_obj, "tlg_uv_v_m_per_tile"):
+            curve_obj.tlg_uv_v_m_per_tile = 1.0
 
-        mesh_obj["taxilines_source_curve"] = curve_obj.name
-        curve_obj["taxilines_mesh"] = mesh_obj.name
+        # Ensure curves stay visible while authoring.
+        try:
+            context.scene.tlg_view_mode = "EDIT"
+        except Exception:
+            pass
+        ensure_taxi_preview(curve_obj, context=context)
 
         # Make active
         context.view_layer.objects.active = curve_obj
@@ -114,7 +116,6 @@ class TAXILINES_OT_draw_taxi_line(bpy.types.Operator):
         self._spline_index = len(curve_data.splines) - 1
 
         self._curve_obj = curve_obj
-        self._mesh_obj = mesh_obj
         self._has_first_point = False
 
         # Keep the curve in Edit Mode so control points are visible while drawing and after finishing.
@@ -162,7 +163,7 @@ class TAXILINES_OT_draw_taxi_line(bpy.types.Operator):
             if self._curve_obj:
                 context.view_layer.objects.active = self._curve_obj
                 self._curve_obj.select_set(True)
-                self._safe_mode_set(context, self._curve_obj, "EDIT")
+                self._safe_mode_set(context, self._curve_obj, "OBJECT")
 
             return {"FINISHED"}
 
@@ -221,7 +222,7 @@ class TAXILINES_OT_draw_taxi_line(bpy.types.Operator):
             if self._curve_obj:
                 context.view_layer.objects.active = self._curve_obj
                 self._curve_obj.select_set(True)
-                self._safe_mode_set(context, self._curve_obj, "EDIT")
+                self._safe_mode_set(context, self._curve_obj, "OBJECT")
 
             return {"FINISHED"}
 

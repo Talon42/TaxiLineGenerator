@@ -25,9 +25,9 @@ def apply_taxi_handles_to_spline(spline):
 
     # Fixed "taxi line" handle behavior (no user slider):
     # - Default: smooth tangent (bisector) for rounded corners.
-    # - Special-case ~90° corners for a cleaner fillet-like turn.
-    # - Straighten approach/departure on moderate turns to avoid "snaking".
-    handle_scale = 0.34
+    # - Keep corners C1-continuous (avoid hard kinks) so thick ribbons don't self-overlap.
+    # - Straighten approach/departure handles around turns to avoid "snaking".
+    handle_scale = 0.45
 
     # Explicit handles reduce overshoot and keep corners predictable.
     for bp in pts:
@@ -70,37 +70,34 @@ def apply_taxi_handles_to_spline(spline):
         t_out = _norm_or(nxt - p, Vector((1.0, 0.0, 0.0)))
         deflection = degrees(acos(_clamp(t_in.dot(t_out), -1.0, 1.0)))  # 0 straight, 180 reverse
 
-        # For near-right angles, prefer segment-aligned handles (fillet-like) so the
-        # path stays straight up to the corner and the outside edge rounds cleanly.
-        if 70.0 <= deflection <= 110.0:
-            vL = -t_in
-            vR = t_out
-            local_scale = 0.42
-        else:
-            # Default: smooth tangent (colinear handles) for a rounded corner.
-            t = t_in + t_out
-            if t.length <= 1e-9:
-                t = t_out
-            t = _norm_or(t, t_out)
-            vL = -t
-            vR = t
-            local_scale = handle_scale
+        # Smooth tangent (colinear handles) for a rounded corner.
+        # Note: segment-aligned (non-colinear) handles create a hard kink at the point,
+        # which can cause ribbon meshes to overlap on tight turns.
+        t = t_in + t_out
+        if t.length <= 1e-9:
+            t = t_out
+        t = _norm_or(t, t_out)
+        vL = -t
+        vR = t
+
+        # Near right angles, bias toward a wider fillet to avoid self-intersections.
+        local_scale = 0.60 if 70.0 <= deflection <= 110.0 else handle_scale
 
         base = min(dist_in, dist_out)
         length = base * local_scale
 
-        # Reduce length for extremely sharp corners (prevents loops/overshoot) but keep rounding.
-        if deflection < 20.0:
+        # Reduce length for near U-turns (prevents loops/overshoot) but keep rounding.
+        if deflection > 160.0:
             length *= 0.55
-        elif deflection < 45.0:
+        elif deflection > 135.0:
             length *= 0.75
 
         bp.handle_left = p + vL * length
         bp.handle_right = p + vR * length
 
-    # Second pass: straighten approach/departure handles before/after significant turns
+    # Second pass: straighten approach/departure handles before/after turns
     # to avoid "snaking" where the curve initially bends the wrong way.
-    # Only apply to moderate turns; for right angles we handle the corner point directly.
+    # Only affects neighboring points (not the corner point itself), so it stays non-destructive.
     turn_min_deg = 25.0
     turn_max_deg = 70.0
     approach_scale = 0.08
