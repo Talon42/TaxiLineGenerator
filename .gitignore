@@ -1,1 +1,12 @@
+# Build and distribution artifacts
+# Ignoring the 'dist' folder as requested, and also *.zip files
+# which are mentioned as a distribution format in your README.
+dist/
+*.zip
+
+# Python cache files
+__pycache__/
+*.pyc
+
+#msfs exporter
 io_scene_gltf2_msfs/
