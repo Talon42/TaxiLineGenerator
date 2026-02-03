@@ -108,10 +108,6 @@ class TAXILINES_PT_main(bpy.types.Panel):
         create_box = layout.box()
         create_box.label(text="Create")
 
-        if target_curve is None:
-            create_box.prop(context.scene, "tlg_default_width", text="Default Line Width")
-            create_box.separator()
-
         create_box.operator(
             "taxilines.draw_taxi_line",
             text="DRAWING LINE" if is_drawing else "Create Taxi Line",
@@ -135,6 +131,10 @@ class TAXILINES_PT_main(bpy.types.Panel):
 
         modifiers_box = layout.box()
         modifiers_box.label(text="Modifiers")
+
+        if target_curve is None:
+            modifiers_box.prop(context.scene, "tlg_default_width", text="Default Line Width")
+            modifiers_box.separator()
 
         if target_curve is not None:
             modifiers_box.prop(target_curve, "tlg_line_width", text="Line Width")
