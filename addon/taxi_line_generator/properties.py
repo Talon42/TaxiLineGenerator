@@ -1,10 +1,21 @@
 import bpy  # pyright: ignore[reportMissingImports]
+import re
+import uuid
 
 from .curve_utils import apply_taxi_handles_to_curve
 
 _TLG_PREVIEW_NODEGROUP_NAME = "TLG_TaxiLinePreview"
 _TLG_PREVIEW_MODIFIER_NAME = "TLG_TaxiLinePreview"
 _TLG_PREVIEW_NODEGROUP_VERSION = 9
+
+_TLG_LINE_ID_KEY = "tlg_line_id"
+_TLG_LINE_ROLE_KEY = "tlg_line_role"
+_TLG_LINE_NAME_KEY = "tlg_line_name"
+_TLG_LINE_LAST_NAME_KEY = "tlg_last_seen_name"
+
+_TLG_ROLE_SRC = "SRC"
+_TLG_ROLE_MESH = "MESH"
+_TLG_ROLE_BASE = "BASE"
 
 _TLG_COLLECTION_ROOT_NAME = "Taxi Lines"
 _TLG_COLLECTION_CURVES_NAME = "EDIT - Curves"
@@ -14,6 +25,228 @@ _TLG_COLLECTION_INTERNAL_NAME = "_INTERNAL - Base"
 # Legacy collection names (kept for migrating older files).
 _TLG_LEGACY_CURVES_COLLECTION_NAME = "TAXI_LINES"
 _TLG_LEGACY_BAKED_COLLECTION_NAME = "TLG_Baked"
+
+
+_TLG_DUPE_SUFFIX_RE = re.compile(r"^(.*)\.(\d{3})$")
+
+
+def tlg_parse_base_name(name: str) -> str:
+    """
+    Convert an object name into a shared 'base name' used by the linked trio.
+
+    Handles both current and legacy suffix schemes:
+    - <BASE>_SRC / <BASE>_MESH / <BASE>_BASE
+    - <BASE>_SRC_MESH / <BASE>_SRC_BASE (legacy export/base derived from curve name)
+
+    Also handles Blender dupe suffixes like ".001" at the end.
+    """
+    if not name:
+        return ""
+
+    m = _TLG_DUPE_SUFFIX_RE.match(name)
+    if m:
+        core = m.group(1)
+        dupe = "." + m.group(2)
+    else:
+        core = name
+        dupe = ""
+
+    for suffix in ("_SRC_MESH", "_SRC_BASE", "_SRC", "_MESH", "_BASE"):
+        if core.endswith(suffix):
+            return core[: -len(suffix)] + dupe
+
+    return core + dupe
+
+
+def _tlg_ensure_line_id(obj):
+    if obj is None:
+        return None
+    try:
+        existing = obj.get(_TLG_LINE_ID_KEY)
+    except Exception:
+        existing = None
+    if existing:
+        return str(existing)
+
+    line_id = uuid.uuid4().hex
+    try:
+        obj[_TLG_LINE_ID_KEY] = line_id
+    except Exception:
+        return None
+    return line_id
+
+
+def _tlg_set_role(obj, role: str):
+    if obj is None:
+        return
+    try:
+        obj[_TLG_LINE_ROLE_KEY] = str(role)
+    except Exception:
+        pass
+
+
+def _tlg_set_last_seen_name(obj):
+    if obj is None:
+        return
+    try:
+        obj[_TLG_LINE_LAST_NAME_KEY] = obj.name
+    except Exception:
+        pass
+
+
+def _tlg_get_line_base_name(obj):
+    if obj is None:
+        return ""
+
+    current_name = getattr(obj, "name", "") or ""
+    try:
+        last_seen = obj.get(_TLG_LINE_LAST_NAME_KEY)
+    except Exception:
+        last_seen = None
+
+    # If the user renamed the object, refresh the stored base name so operators don't
+    # revert to a stale cached value.
+    if last_seen != current_name:
+        base = tlg_parse_base_name(current_name)
+        if base:
+            try:
+                obj[_TLG_LINE_NAME_KEY] = base
+            except Exception:
+                pass
+            return base
+    try:
+        base = obj.get(_TLG_LINE_NAME_KEY)
+    except Exception:
+        base = None
+    if base:
+        return str(base)
+    base = tlg_parse_base_name(current_name)
+    if base:
+        try:
+            obj[_TLG_LINE_NAME_KEY] = base
+        except Exception:
+            pass
+    return base
+
+
+def _tlg_find_object_by_line_id(line_id: str, role: str | None = None, obj_type: str | None = None):
+    if not line_id:
+        return None
+    try:
+        objects = getattr(bpy.data, "objects", None)
+    except Exception:
+        objects = None
+    if not objects:
+        return None
+
+    for obj in list(objects):
+        try:
+            if obj_type and obj.type != obj_type:
+                continue
+            if obj.get(_TLG_LINE_ID_KEY) != line_id:
+                continue
+            if role and obj.get(_TLG_LINE_ROLE_KEY) != role:
+                continue
+            return obj
+        except Exception:
+            continue
+
+    return None
+
+
+def tlg_sync_linked_object_names(curve_obj, base_name: str):
+    """
+    Rename the SRC/MESH/BASE objects for a line based on base_name.
+
+    Linkage uses tlg_line_id; this function also refreshes legacy name-based pointers
+    (tlg_baked_mesh / tlg_base_mesh / tlg_source_curve) for maximum compatibility.
+    """
+    if curve_obj is None or not base_name:
+        return
+
+    line_id = _tlg_ensure_line_id(curve_obj)
+    _tlg_set_role(curve_obj, _TLG_ROLE_SRC)
+
+    try:
+        curve_obj[_TLG_LINE_NAME_KEY] = base_name
+    except Exception:
+        pass
+
+    export_obj = _tlg_find_object_by_line_id(line_id, role=_TLG_ROLE_MESH, obj_type="MESH")
+    base_obj = _tlg_find_object_by_line_id(line_id, role=_TLG_ROLE_BASE, obj_type="MESH")
+
+    curve_name = f"{base_name}_SRC"
+    export_name = f"{base_name}_MESH"
+    base_mesh_name = f"{base_name}_BASE"
+
+    try:
+        curve_obj.name = curve_name
+    except Exception:
+        pass
+
+    if export_obj is not None:
+        try:
+            export_obj.name = export_name
+        except Exception:
+            pass
+    if base_obj is not None:
+        try:
+            base_obj.name = base_mesh_name
+        except Exception:
+            pass
+
+    # Refresh legacy linkage keys so older code paths keep working (and helps debugging in the Outliner).
+    if export_obj is not None:
+        try:
+            curve_obj["tlg_baked_mesh"] = export_obj.name
+        except Exception:
+            pass
+        try:
+            export_obj["tlg_source_curve"] = curve_obj.name
+        except Exception:
+            pass
+        _tlg_set_last_seen_name(export_obj)
+
+    if base_obj is not None:
+        try:
+            curve_obj["tlg_base_mesh"] = base_obj.name
+        except Exception:
+            pass
+        try:
+            base_obj["tlg_source_curve"] = curve_obj.name
+        except Exception:
+            pass
+        _tlg_set_last_seen_name(base_obj)
+
+    _tlg_set_last_seen_name(curve_obj)
+
+
+def get_source_curve_for_mesh(mesh_obj):
+    """
+    Resolve a source curve for a mesh, robust to renames.
+
+    Preferred linkage is tlg_line_id/tlg_line_role. Falls back to legacy name keys.
+    """
+    if not mesh_obj or getattr(mesh_obj, "type", None) != "MESH":
+        return None
+
+    try:
+        line_id = mesh_obj.get(_TLG_LINE_ID_KEY)
+    except Exception:
+        line_id = None
+
+    if line_id:
+        curve_obj = _tlg_find_object_by_line_id(str(line_id), role=_TLG_ROLE_SRC, obj_type="CURVE")
+        if curve_obj is not None:
+            return curve_obj
+
+    curve_name = mesh_obj.get("tlg_source_curve") or mesh_obj.get("taxilines_source_curve")
+    if not curve_name:
+        return None
+    curve_obj = bpy.data.objects.get(curve_name)
+    if not curve_obj or curve_obj.type != "CURVE":
+        return None
+    return curve_obj
 
 
 def _nodes_new_first_available(nodes, type_names):
@@ -365,6 +598,12 @@ def is_taxi_curve(obj):
 
 
 def ensure_taxi_preview(curve_obj, context=None):
+    # Ensure persistent linkage metadata so users can rename objects without breaking the add-on.
+    line_id = _tlg_ensure_line_id(curve_obj)
+    _tlg_set_role(curve_obj, _TLG_ROLE_SRC)
+    _tlg_get_line_base_name(curve_obj)
+    _tlg_set_last_seen_name(curve_obj)
+
     mod = _ensure_ribbon_mesh_modifier(curve_obj)
     if mod is None:
         return None
@@ -477,22 +716,82 @@ def get_taxi_internal_collection(scene):
 def get_baked_mesh_for_curve(curve_obj):
     if not curve_obj:
         return None
+
+    line_id = _tlg_ensure_line_id(curve_obj)
+    _tlg_set_role(curve_obj, _TLG_ROLE_SRC)
+
     baked_name = curve_obj.get("tlg_baked_mesh")
     if baked_name:
         obj = bpy.data.objects.get(baked_name)
         if obj and obj.type == "MESH":
+            try:
+                if obj.get(_TLG_LINE_ID_KEY) != line_id:
+                    obj[_TLG_LINE_ID_KEY] = line_id
+                _tlg_set_role(obj, _TLG_ROLE_MESH)
+            except Exception:
+                pass
             return obj
+
+    # Preferred: resolve by persistent ID (safe under renames).
+    obj = _tlg_find_object_by_line_id(line_id, role=_TLG_ROLE_MESH, obj_type="MESH")
+    if obj is not None:
+        try:
+            curve_obj["tlg_baked_mesh"] = obj.name
+        except Exception:
+            pass
+        return obj
+
+    # Legacy fallback: search meshes pointing at this curve by name.
+    for obj in list(getattr(bpy.data, "objects", []) or []):
+        try:
+            if obj.type == "MESH" and obj.get("tlg_source_curve") == curve_obj.name:
+                obj[_TLG_LINE_ID_KEY] = line_id
+                _tlg_set_role(obj, _TLG_ROLE_MESH)
+                curve_obj["tlg_baked_mesh"] = obj.name
+                return obj
+        except Exception:
+            continue
+
     return None
 
 
 def get_base_mesh_for_curve(curve_obj):
     if not curve_obj:
         return None
+
+    line_id = _tlg_ensure_line_id(curve_obj)
+    _tlg_set_role(curve_obj, _TLG_ROLE_SRC)
+
     base_name = curve_obj.get("tlg_base_mesh")
     if base_name:
         obj = bpy.data.objects.get(base_name)
         if obj and obj.type == "MESH":
+            try:
+                if obj.get(_TLG_LINE_ID_KEY) != line_id:
+                    obj[_TLG_LINE_ID_KEY] = line_id
+                _tlg_set_role(obj, _TLG_ROLE_BASE)
+            except Exception:
+                pass
             return obj
+
+    obj = _tlg_find_object_by_line_id(line_id, role=_TLG_ROLE_BASE, obj_type="MESH")
+    if obj is not None:
+        try:
+            curve_obj["tlg_base_mesh"] = obj.name
+        except Exception:
+            pass
+        return obj
+
+    for obj in list(getattr(bpy.data, "objects", []) or []):
+        try:
+            if obj.type == "MESH" and obj.get("tlg_source_curve") == curve_obj.name and obj.name.endswith("_BASE"):
+                obj[_TLG_LINE_ID_KEY] = line_id
+                _tlg_set_role(obj, _TLG_ROLE_BASE)
+                curve_obj["tlg_base_mesh"] = obj.name
+                return obj
+        except Exception:
+            continue
+
     return None
 
 
@@ -616,9 +915,12 @@ __all__ = (
     "get_baked_collection",
     "get_baked_mesh_for_curve",
     "get_base_mesh_for_curve",
+    "get_source_curve_for_mesh",
     "get_taxi_root_collection",
     "get_taxi_curves_collection",
     "get_taxi_export_collection",
     "get_taxi_internal_collection",
     "is_taxi_curve",
+    "tlg_parse_base_name",
+    "tlg_sync_linked_object_names",
 )

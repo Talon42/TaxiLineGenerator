@@ -18,6 +18,8 @@ from .operators.edit_path import TAXILINES_OT_edit_path, TAXILINES_OT_finish_edi
 from .operators.insert_point import TAXILINES_OT_insert_point_at_mouse, draw_insert_point_menu
 from .operators.normalize_curve import TAXILINES_OT_normalize_curve
 from .operators.recompute_handles import TAXILINES_OT_recompute_handles
+from .name_sync import register_handlers as _register_handlers
+from .name_sync import unregister_handlers as _unregister_handlers
 from .properties import register_properties, unregister_properties
 from .ui import TAXILINES_OT_reload_addon, TAXILINES_PT_main
 
@@ -57,8 +59,12 @@ def register():
         kmi = km.keymap_items.new("taxilines.insert_point", type="RIGHTMOUSE", value="PRESS", shift=True)
         _addon_keymaps.append((km, kmi))
 
+    _register_handlers()
+
 
 def unregister():
+    _unregister_handlers()
+
     for km, kmi in _addon_keymaps:
         try:
             km.keymap_items.remove(kmi)

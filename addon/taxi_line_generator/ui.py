@@ -4,7 +4,7 @@ import importlib
 import sys
 from datetime import datetime, timezone
 
-from .properties import get_baked_mesh_for_curve, is_taxi_curve
+from .properties import get_baked_mesh_for_curve, get_source_curve_for_mesh, is_taxi_curve
 
 
 _LAST_RELOAD_STATUS = None
@@ -97,10 +97,12 @@ class TAXILINES_PT_main(bpy.types.Panel):
             layout.label(text="Curve is authoritative; mesh is for export.")
             layout.operator("taxilines.finish_editing", text="Edit Mesh", icon="MESH_GRID")
             layout.separator()
-        elif active and active.type == "MESH" and active.get("tlg_source_curve"):
-            layout.label(text=f"Source Curve: {active.get('tlg_source_curve')}")
-            layout.operator("taxilines.edit_path", text="Edit Curve", icon="CURVE_BEZCURVE")
-            layout.separator()
+        elif active and active.type == "MESH":
+            curve = get_source_curve_for_mesh(active)
+            if curve and is_taxi_curve(curve):
+                layout.label(text=f"Source Curve: {curve.name}")
+                layout.operator("taxilines.edit_path", text="Edit Curve", icon="CURVE_BEZCURVE")
+                layout.separator()
         else:
             layout.prop(context.scene, "tlg_default_width", text="Default Line Width")
             layout.operator("taxilines.create_ribbon_mesh", text="Attach GN Preview", icon="GEOMETRY_NODES")

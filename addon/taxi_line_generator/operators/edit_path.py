@@ -5,6 +5,9 @@ from ..properties import (
     ensure_taxi_preview,
     get_base_mesh_for_curve,
     get_baked_mesh_for_curve,
+    get_source_curve_for_mesh,
+    tlg_parse_base_name,
+    tlg_sync_linked_object_names,
     get_taxi_curves_collection,
     get_taxi_export_collection,
     get_taxi_internal_collection,
@@ -52,15 +55,7 @@ def _get_src_collection():
 
 
 def _get_source_curve_from_mesh(mesh_obj):
-    if not mesh_obj or mesh_obj.type != "MESH":
-        return None
-    curve_name = mesh_obj.get("tlg_source_curve") or mesh_obj.get("taxilines_source_curve")
-    if not curve_name:
-        return None
-    curve_obj = bpy.data.objects.get(curve_name)
-    if not curve_obj or curve_obj.type != "CURVE":
-        return None
-    return curve_obj
+    return get_source_curve_for_mesh(mesh_obj)
 
 
 def _get_mesh_from_curve(curve_obj):
@@ -77,6 +72,42 @@ def _iter_target_curves(context):
             curve_obj = obj
         elif getattr(obj, "type", None) == "MESH":
             curve_obj = _get_source_curve_from_mesh(obj)
+            # If the user renamed the export mesh (or base) manually, treat that as authoritative
+            # and sync the linked trio right away (prevents Edit Curve from "reverting" the mesh name).
+            if curve_obj is not None:
+                try:
+                    ensure_taxi_preview(curve_obj, context=context)
+                    line_id = curve_obj.get("tlg_line_id")
+                    if line_id:
+                        try:
+                            obj["tlg_line_id"] = line_id
+                        except Exception:
+                            pass
+                        try:
+                            role = obj.get("tlg_line_role")
+                        except Exception:
+                            role = None
+                        if not role:
+                            try:
+                                if str(getattr(obj, "name", "")).endswith("_BASE") or (
+                                    bool(getattr(obj, "hide_select", False))
+                                    and bool(getattr(obj, "hide_viewport", False))
+                                ):
+                                    role = "BASE"
+                                else:
+                                    role = "MESH"
+                            except Exception:
+                                role = "MESH"
+                        try:
+                            obj["tlg_line_role"] = role
+                        except Exception:
+                            pass
+
+                    base = tlg_parse_base_name(getattr(obj, "name", "") or "")
+                    if base:
+                        tlg_sync_linked_object_names(curve_obj, base)
+                except Exception:
+                    pass
 
         if curve_obj is None:
             continue
@@ -124,6 +155,9 @@ def _unlink_obj_from_collection_by_name(obj, names):
 
 
 def _ensure_export_and_base_mesh_objs(context, curve_obj):
+    # Ensure this curve has persistent linkage metadata (safe under renames).
+    ensure_taxi_preview(curve_obj, context=context)
+
     scene = getattr(context, "scene", None)
     export_col = get_taxi_export_collection(scene)
     curves_col = get_taxi_curves_collection(scene)
@@ -133,12 +167,23 @@ def _ensure_export_and_base_mesh_objs(context, curve_obj):
     _link_obj_to_collection(curve_obj, curves_col)
 
     export_obj = get_baked_mesh_for_curve(curve_obj)
+    # Treat an existing export/base name as authoritative (prevents name revert if user renamed mesh/base).
+    try:
+        if export_obj is not None:
+            base_from_export = tlg_parse_base_name(export_obj.name)
+            if base_from_export:
+                curve_obj["tlg_line_name"] = base_from_export
+    except Exception:
+        pass
     if export_obj is None:
-        name = f"{curve_obj.name}_MESH"
+        base = curve_obj.get("tlg_line_name") or tlg_parse_base_name(curve_obj.name)
+        name = f"{base}_MESH"
         mesh = bpy.data.meshes.new(name)
         export_obj = bpy.data.objects.new(name, mesh)
         curve_obj["tlg_baked_mesh"] = export_obj.name
         export_obj["tlg_source_curve"] = curve_obj.name
+        export_obj["tlg_line_id"] = curve_obj.get("tlg_line_id")
+        export_obj["tlg_line_role"] = "MESH"
         _link_obj_to_collection(export_obj, export_col)
     else:
         _link_obj_to_collection(export_obj, export_col)
@@ -146,19 +191,39 @@ def _ensure_export_and_base_mesh_objs(context, curve_obj):
             export_obj["tlg_source_curve"] = curve_obj.name
         except Exception:
             pass
+        try:
+            export_obj["tlg_line_id"] = curve_obj.get("tlg_line_id")
+            export_obj["tlg_line_role"] = "MESH"
+        except Exception:
+            pass
 
     base_obj = get_base_mesh_for_curve(curve_obj)
+    try:
+        if base_obj is not None:
+            base_from_base = tlg_parse_base_name(base_obj.name)
+            if base_from_base:
+                curve_obj["tlg_line_name"] = base_from_base
+    except Exception:
+        pass
     if base_obj is None:
-        name = f"{curve_obj.name}_BASE"
+        base = curve_obj.get("tlg_line_name") or tlg_parse_base_name(curve_obj.name)
+        name = f"{base}_BASE"
         mesh = bpy.data.meshes.new(name)
         base_obj = bpy.data.objects.new(name, mesh)
         curve_obj["tlg_base_mesh"] = base_obj.name
         base_obj["tlg_source_curve"] = curve_obj.name
+        base_obj["tlg_line_id"] = curve_obj.get("tlg_line_id")
+        base_obj["tlg_line_role"] = "BASE"
         _link_obj_to_collection(base_obj, internal_col)
     else:
         _link_obj_to_collection(base_obj, internal_col)
         try:
             base_obj["tlg_source_curve"] = curve_obj.name
+        except Exception:
+            pass
+        try:
+            base_obj["tlg_line_id"] = curve_obj.get("tlg_line_id")
+            base_obj["tlg_line_role"] = "BASE"
         except Exception:
             pass
 
@@ -171,6 +236,14 @@ def _ensure_export_and_base_mesh_objs(context, curve_obj):
         base_obj.hide_viewport = True
         base_obj.hide_select = True
         base_obj.hide_render = True
+    except Exception:
+        pass
+
+    # Normalize names to <BASE>_SRC / <BASE>_MESH / <BASE>_BASE (no "_SRC_" in mesh/base).
+    try:
+        base_name = curve_obj.get("tlg_line_name") or tlg_parse_base_name(curve_obj.name)
+        if base_name:
+            tlg_sync_linked_object_names(curve_obj, base_name)
     except Exception:
         pass
 
@@ -752,8 +825,12 @@ class TAXILINES_OT_finish_editing(bpy.types.Operator):
                 export_obj.select_set(True)
             except Exception:
                 pass
-            if export_obj.get("tlg_source_curve") == getattr(active_curve, "name", None):
-                active_export = export_obj
+            try:
+                if export_obj.get("tlg_line_id") and export_obj.get("tlg_line_id") == active_curve.get("tlg_line_id"):
+                    active_export = export_obj
+            except Exception:
+                if export_obj.get("tlg_source_curve") == getattr(active_curve, "name", None):
+                    active_export = export_obj
         context.view_layer.objects.active = active_export
 
         # For single-object workflows, drop into Edit Mode on the export mesh.

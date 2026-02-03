@@ -4,6 +4,7 @@ from ..properties import (
     ensure_taxi_preview,
     get_baked_collection,
     get_baked_mesh_for_curve,
+    tlg_parse_base_name,
     is_taxi_curve,
 )
 
@@ -52,9 +53,19 @@ def _find_or_create_baked_obj(context, curve_obj, baked_col):
 
     # Fallback: search baked collection for an object pointing at this curve.
     matches = []
+    line_id = None
+    try:
+        line_id = curve_obj.get("tlg_line_id")
+    except Exception:
+        line_id = None
     for obj in list(getattr(baked_col, "objects", [])):
         try:
-            if obj.type == "MESH" and obj.get("tlg_source_curve") == curve_obj.name:
+            if obj.type != "MESH":
+                continue
+            if line_id and obj.get("tlg_line_id") == line_id and obj.get("tlg_line_role") == "MESH":
+                matches.append(obj)
+                continue
+            if obj.get("tlg_source_curve") == curve_obj.name:
                 matches.append(obj)
         except Exception:
             continue
@@ -72,12 +83,16 @@ def _find_or_create_baked_obj(context, curve_obj, baked_col):
                 pass
         return keep
 
-    name = f"{curve_obj.name}_BAKED"
+    base = curve_obj.get("tlg_line_name") or tlg_parse_base_name(curve_obj.name)
+    name = f"{base}_MESH"
     mesh = bpy.data.meshes.new(name)
     baked_obj = bpy.data.objects.new(name, mesh)
     baked_col.objects.link(baked_obj)
     curve_obj["tlg_baked_mesh"] = baked_obj.name
     baked_obj["tlg_source_curve"] = curve_obj.name
+    if line_id:
+        baked_obj["tlg_line_id"] = line_id
+        baked_obj["tlg_line_role"] = "MESH"
     return baked_obj
 
 
@@ -136,6 +151,11 @@ class TAXILINES_OT_bake_export_mesh(bpy.types.Operator):
             baked_obj.matrix_world = curve_obj.matrix_world
             baked_obj["tlg_source_curve"] = curve_obj.name
             curve_obj["tlg_baked_mesh"] = baked_obj.name
+            try:
+                baked_obj["tlg_line_id"] = curve_obj.get("tlg_line_id")
+                baked_obj["tlg_line_role"] = "MESH"
+            except Exception:
+                pass
 
             _copy_material_slots_from_curve(curve_obj, baked_obj.data)
 
