@@ -451,15 +451,121 @@ def _fit_uv_to_bbox(mesh, target_bbox, uv_layer_name="UVMap"):
     tsize_u = tmax_u - tmin_u
     tsize_v = tmax_v - tmin_v
     eps = 1e-12
-    if abs(csize_u) <= eps or abs(csize_v) <= eps:
-        return False
+    if abs(csize_u) <= eps:
+        if abs(tsize_u) > eps:
+            return False
+        su = 1.0
+    else:
+        if abs(tsize_u) <= eps:
+            return False
+        su = tsize_u / csize_u
 
-    su = tsize_u / csize_u
-    sv = tsize_v / csize_v
+    if abs(csize_v) <= eps:
+        if abs(tsize_v) > eps:
+            return False
+        sv = 1.0
+    else:
+        if abs(tsize_v) <= eps:
+            return False
+        sv = tsize_v / csize_v
 
     for uv in uv_layer.data:
         uv.uv.x = (uv.uv.x - cmin_u) * su + tmin_u
         uv.uv.y = (uv.uv.y - cmin_v) * sv + tmin_v
+    return True
+
+
+def _uv_segment_axis_from_bbox(bbox):
+    if bbox is None:
+        return "X"
+    try:
+        min_u, min_v, max_u, max_v = bbox
+        uspan = float(max_u) - float(min_u)
+        vspan = float(max_v) - float(min_v)
+    except Exception:
+        return "X"
+    return "Y" if abs(vspan) > abs(uspan) else "X"
+
+
+def _repeat_uv_u_by_face(mesh, repeat_segments, uv_layer_name="UVMap", slot_axis="X"):
+    if mesh is None or not uv_layer_name or not hasattr(mesh, "uv_layers"):
+        return False
+    try:
+        segments = int(round(float(repeat_segments)))
+    except Exception:
+        segments = 0
+    if segments < 0:
+        segments = 0
+
+    try:
+        uv_layer = mesh.uv_layers.get(uv_layer_name)
+    except Exception:
+        uv_layer = None
+    if uv_layer is None:
+        return False
+    try:
+        polys = list(mesh.polygons)
+    except Exception:
+        polys = []
+    if not polys:
+        return False
+    segment_slots = segments if segments > 0 else len(polys)
+    if segment_slots < 1:
+        return False
+
+    polys.sort(key=lambda p: int(getattr(p, "index", 0)))
+    eps = 1e-12
+    for face_rank, poly in enumerate(polys):
+        try:
+            loop_start = int(poly.loop_start)
+            loop_total = int(poly.loop_total)
+        except Exception:
+            continue
+        if loop_total <= 0:
+            continue
+
+        loop_indices = list(range(loop_start, loop_start + loop_total))
+        u_values = []
+        v_values = []
+        for loop_idx in loop_indices:
+            try:
+                uv = uv_layer.data[loop_idx].uv
+                u_values.append(float(uv.x))
+                v_values.append(float(uv.y))
+            except Exception:
+                pass
+        if not u_values or not v_values:
+            continue
+
+        umin = min(u_values)
+        umax = max(u_values)
+        vmin = min(v_values)
+        vmax = max(v_values)
+        uspan = umax - umin
+        vspan = vmax - vmin
+        face_slot = float(face_rank % segment_slots)
+
+        for loop_idx in loop_indices:
+            try:
+                uv = uv_layer.data[loop_idx].uv
+                u = float(uv.x)
+                v = float(uv.y)
+            except Exception:
+                continue
+            if abs(uspan) <= eps:
+                local_u = 0.0
+            else:
+                local_u = (u - umin) / uspan
+            if abs(vspan) <= eps:
+                local_v = 0.0
+            else:
+                local_v = (v - vmin) / vspan
+            if slot_axis == "Y":
+                uv.x = local_u
+                uv.y = face_slot + local_v
+            else:
+                uv.x = face_slot + local_u
+                uv.y = local_v
     return True
 
 
@@ -689,10 +795,9 @@ class TAXILINES_OT_finish_editing(bpy.types.Operator):
 
             saved_uv_bbox = _get_curve_saved_uv_bbox(curve_obj)
             old_uv_bbox = _uv_bbox(old_export_mesh, uv_layer_name=uv_layer_name)
-            target_uv_bbox = saved_uv_bbox or old_uv_bbox
             _debug_uv(
                 context,
-                f"finish_editing: curve={curve_obj.name} export={export_obj.name} uv={uv_layer_name} saved={saved_uv_bbox} old={old_uv_bbox} target={target_uv_bbox}",
+                f"finish_editing: curve={curve_obj.name} export={export_obj.name} uv={uv_layer_name} saved={saved_uv_bbox} old={old_uv_bbox}",
             )
             old_materials = []
             try:
@@ -786,9 +891,57 @@ class TAXILINES_OT_finish_editing(bpy.types.Operator):
                 # onto the Mesh datablock before applying bbox fitting.
                 _safe_mode_set(context, export_obj, "OBJECT")
 
+                try:
+                    uv_segments = int(round(float(getattr(curve_obj, "tlg_uv_segments", 0))))
+                except Exception:
+                    uv_segments = 0
+                if uv_segments < 0:
+                    uv_segments = 0
+                current_bbox_after_unwrap = _uv_bbox(getattr(export_obj, "data", None), uv_layer_name=uv_layer_name)
+                slot_axis = _uv_segment_axis_from_bbox(current_bbox_after_unwrap)
+                _repeat_uv_u_by_face(export_obj.data, uv_segments, uv_layer_name=uv_layer_name, slot_axis=slot_axis)
+
             # Preserve the user's last UV scale/offset across regenerations.
             # Prefer the bbox saved when leaving Edit Mesh, then fall back to the previous mesh bbox.
             applied = False
+            target_uv_bbox = saved_uv_bbox
+
+            if target_uv_bbox is None:
+                try:
+                    uv_segments = int(round(float(getattr(curve_obj, "tlg_uv_segments", 0))))
+                except Exception:
+                    uv_segments = 0
+                if uv_segments < 0:
+                    uv_segments = 0
+
+                try:
+                    current_bbox = _uv_bbox(getattr(export_obj, "data", None), uv_layer_name=uv_layer_name)
+                except Exception:
+                    current_bbox = None
+
+                if current_bbox is not None:
+                    cmin_u, cmin_v, _cmax_u, cmax_v = current_bbox
+                    c_u_span = current_bbox[2] - current_bbox[0]
+                    c_v_span = cmax_v - cmin_v
+                    slot_axis = _uv_segment_axis_from_bbox(current_bbox)
+                    if c_v_span >= 0.0:
+                        if old_uv_bbox is not None:
+                            amin_u, amin_v, amax_u, amax_v = old_uv_bbox
+                        else:
+                            amin_u, amin_v = cmin_u, cmin_v
+                            amax_u, amax_v = current_bbox[2], cmax_v
+
+                        old_u_span = amax_u - amin_u
+                        old_v_span = amax_v - amin_v
+                        if slot_axis == "Y":
+                            keep_u_span = old_u_span if old_u_span > 0.0 else c_u_span
+                            desired_seg_span = float(uv_segments) if uv_segments > 0 else c_v_span
+                            target_uv_bbox = (amin_u, amin_v, amin_u + keep_u_span, amin_v + desired_seg_span)
+                        else:
+                            keep_v_span = old_v_span if old_v_span > 0.0 else c_v_span
+                            desired_seg_span = float(uv_segments) if uv_segments > 0 else c_u_span
+                            target_uv_bbox = (amin_u, amin_v, amin_u + desired_seg_span, amin_v + keep_v_span)
+
             if target_uv_bbox is not None:
                 try:
                     applied = _fit_uv_to_bbox(export_obj.data, target_uv_bbox, uv_layer_name=uv_layer_name)

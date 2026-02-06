@@ -102,6 +102,7 @@ class TAXILINES_PT_main(bpy.types.Panel):
             active_mesh_source_curve = get_source_curve_for_mesh(active)
         active_mesh_has_taxi_curve = bool(active_mesh_source_curve and is_taxi_curve(active_mesh_source_curve))
         is_edit_mesh_mode = bool(active and active.type == "MESH" and active_mesh_has_taxi_curve)
+        is_editing_mesh_uvs = bool(active and active.type == "MESH" and active_mesh_has_taxi_curve and context.mode == "EDIT_MESH")
 
         target_curve = active if active_taxi_curve else (active_mesh_source_curve if active_mesh_has_taxi_curve else None)
 
@@ -139,6 +140,11 @@ class TAXILINES_PT_main(bpy.types.Panel):
         if target_curve is not None:
             modifiers_box.prop(target_curve, "tlg_line_width", text="Line Width")
             modifiers_box.prop(target_curve, "tlg_segments_mult", text="Segments")
+            uv_row = modifiers_box.row()
+            uv_row.enabled = not is_editing_mesh_uvs
+            uv_row.prop(target_curve, "tlg_uv_segments", text="UV Segments")
+            if is_editing_mesh_uvs:
+                modifiers_box.label(text="UV Segments updates require Object Mode.")
             if not is_edit_mesh_mode:
                 modifiers_box.operator("taxilines.normalize_curve", text="Normalize Curve", icon="MOD_CURVE")
                 modifiers_box.operator("taxilines.recompute_handles", text="Recompute Taxi Handles", icon="HANDLE_AUTO")

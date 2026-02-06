@@ -115,6 +115,8 @@ class TAXILINES_OT_draw_taxi_line(bpy.types.Operator):
             curve_obj.tlg_uv_u_m_per_tile = 1.0
         if not hasattr(curve_obj, "tlg_uv_v_m_per_tile"):
             curve_obj.tlg_uv_v_m_per_tile = 1.0
+        if not hasattr(curve_obj, "tlg_uv_segments"):
+            curve_obj.tlg_uv_segments = 0
 
         ensure_taxi_preview(curve_obj, context=context)
 

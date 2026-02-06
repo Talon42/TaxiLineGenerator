@@ -820,6 +820,272 @@ def _tlg_curve_settings_update(obj, context):
     ensure_taxi_preview(obj, context=context)
 
 
+def _tlg_uv_bbox(mesh, uv_layer_name="UVMap"):
+    if mesh is None or not uv_layer_name or not hasattr(mesh, "uv_layers"):
+        return None
+    try:
+        uv_layer = mesh.uv_layers.get(uv_layer_name)
+    except Exception:
+        uv_layer = None
+    if uv_layer is None:
+        return None
+    data = getattr(uv_layer, "data", None)
+    if not data:
+        return None
+    min_u = 1e30
+    min_v = 1e30
+    max_u = -1e30
+    max_v = -1e30
+    for uv in data:
+        try:
+            u = float(uv.uv.x)
+            v = float(uv.uv.y)
+        except Exception:
+            continue
+        if u < min_u:
+            min_u = u
+        if v < min_v:
+            min_v = v
+        if u > max_u:
+            max_u = u
+        if v > max_v:
+            max_v = v
+    if min_u > max_u or min_v > max_v:
+        return None
+    return (min_u, min_v, max_u, max_v)
+
+
+def _tlg_fit_uv_to_bbox(mesh, target_bbox, uv_layer_name="UVMap"):
+    if mesh is None or target_bbox is None or not uv_layer_name or not hasattr(mesh, "uv_layers"):
+        return False
+
+    try:
+        uv_layer = mesh.uv_layers.get(uv_layer_name)
+    except Exception:
+        uv_layer = None
+    if uv_layer is None:
+        return False
+
+    current_bbox = _tlg_uv_bbox(mesh, uv_layer_name=uv_layer_name)
+    if current_bbox is None:
+        return False
+
+    cmin_u, cmin_v, cmax_u, cmax_v = current_bbox
+    tmin_u, tmin_v, tmax_u, tmax_v = target_bbox
+
+    csize_u = cmax_u - cmin_u
+    csize_v = cmax_v - cmin_v
+    tsize_u = tmax_u - tmin_u
+    tsize_v = tmax_v - tmin_v
+
+    eps = 1e-12
+    if abs(csize_u) <= eps:
+        if abs(tsize_u) > eps:
+            return False
+        su = 1.0
+    else:
+        if abs(tsize_u) <= eps:
+            return False
+        su = tsize_u / csize_u
+
+    if abs(csize_v) <= eps:
+        if abs(tsize_v) > eps:
+            return False
+        sv = 1.0
+    else:
+        if abs(tsize_v) <= eps:
+            return False
+        sv = tsize_v / csize_v
+
+    for uv in uv_layer.data:
+        uv.uv.x = (uv.uv.x - cmin_u) * su + tmin_u
+        uv.uv.y = (uv.uv.y - cmin_v) * sv + tmin_v
+    return True
+
+
+def _tlg_uv_segment_axis_from_bbox(bbox):
+    if bbox is None:
+        return "X"
+    try:
+        min_u, min_v, max_u, max_v = bbox
+        uspan = float(max_u) - float(min_u)
+        vspan = float(max_v) - float(min_v)
+    except Exception:
+        return "X"
+    return "Y" if abs(vspan) > abs(uspan) else "X"
+
+
+def _tlg_repeat_uv_u_by_face(mesh, repeat_segments, uv_layer_name="UVMap", slot_axis="X"):
+    if mesh is None or not uv_layer_name or not hasattr(mesh, "uv_layers"):
+        return False
+    try:
+        segments = int(round(float(repeat_segments)))
+    except Exception:
+        segments = 0
+    if segments < 0:
+        segments = 0
+
+    try:
+        uv_layer = mesh.uv_layers.get(uv_layer_name)
+    except Exception:
+        uv_layer = None
+    if uv_layer is None:
+        return False
+    try:
+        polys = list(mesh.polygons)
+    except Exception:
+        polys = []
+    if not polys:
+        return False
+    segment_slots = segments if segments > 0 else len(polys)
+    if segment_slots < 1:
+        return False
+
+    polys.sort(key=lambda p: int(getattr(p, "index", 0)))
+    eps = 1e-12
+    for face_rank, poly in enumerate(polys):
+        try:
+            loop_start = int(poly.loop_start)
+            loop_total = int(poly.loop_total)
+        except Exception:
+            continue
+        if loop_total <= 0:
+            continue
+
+        loop_indices = list(range(loop_start, loop_start + loop_total))
+        u_values = []
+        v_values = []
+        for loop_idx in loop_indices:
+            try:
+                uv = uv_layer.data[loop_idx].uv
+                u_values.append(float(uv.x))
+                v_values.append(float(uv.y))
+            except Exception:
+                pass
+        if not u_values or not v_values:
+            continue
+
+        umin = min(u_values)
+        umax = max(u_values)
+        vmin = min(v_values)
+        vmax = max(v_values)
+        uspan = umax - umin
+        vspan = vmax - vmin
+        face_slot = float(face_rank % segment_slots)
+
+        for loop_idx in loop_indices:
+            try:
+                uv = uv_layer.data[loop_idx].uv
+                u = float(uv.x)
+                v = float(uv.y)
+            except Exception:
+                continue
+            if abs(uspan) <= eps:
+                local_u = 0.0
+            else:
+                local_u = (u - umin) / uspan
+            if abs(vspan) <= eps:
+                local_v = 0.0
+            else:
+                local_v = (v - vmin) / vspan
+            if slot_axis == "Y":
+                uv.x = local_u
+                uv.y = face_slot + local_v
+            else:
+                uv.x = face_slot + local_u
+                uv.y = local_v
+    return True
+
+
+def _tlg_uv_segments_update(obj, context):
+    if not obj or obj.type != "CURVE":
+        return
+    if not is_taxi_curve(obj):
+        return
+
+    try:
+        uv_layer_name = obj.get("tlg_export_uv_layer") or None
+    except Exception:
+        uv_layer_name = None
+    uv_layer_name = str(uv_layer_name) if uv_layer_name else None
+
+    try:
+        uv_segments = int(round(float(getattr(obj, "tlg_uv_segments", 0))))
+    except Exception:
+        uv_segments = 0
+    if uv_segments < 0:
+        uv_segments = 0
+
+    try:
+        saved_bbox = obj.get("tlg_export_uv_bbox")
+    except Exception:
+        saved_bbox = None
+
+    export_obj = get_baked_mesh_for_curve(obj)
+    if export_obj is None or getattr(export_obj, "type", None) != "MESH":
+        return
+    if getattr(export_obj, "mode", "OBJECT") != "OBJECT":
+        return
+
+    mesh = getattr(export_obj, "data", None)
+    if mesh is None or not hasattr(mesh, "uv_layers"):
+        return
+
+    if not uv_layer_name:
+        try:
+            uv_layer_name = getattr(getattr(mesh.uv_layers, "active", None), "name", None)
+        except Exception:
+            uv_layer_name = None
+    uv_layer_name = str(uv_layer_name) if uv_layer_name else "UVMap"
+
+    current_bbox_before = _tlg_uv_bbox(mesh, uv_layer_name=uv_layer_name)
+    if current_bbox_before is None:
+        return
+
+    slot_axis = _tlg_uv_segment_axis_from_bbox(saved_bbox if isinstance(saved_bbox, (list, tuple)) and len(saved_bbox) == 4 else current_bbox_before)
+    remapped = _tlg_repeat_uv_u_by_face(mesh, uv_segments, uv_layer_name=uv_layer_name, slot_axis=slot_axis)
+    if not remapped:
+        return
+
+    current_bbox = _tlg_uv_bbox(mesh, uv_layer_name=uv_layer_name)
+    if current_bbox is None:
+        return
+    cmin_u, cmin_v, cmax_u, cmax_v = current_bbox
+
+    amin_u, amin_v, amax_u, amax_v = current_bbox_before
+    if isinstance(saved_bbox, (list, tuple)) and len(saved_bbox) == 4:
+        try:
+            amin_u = float(saved_bbox[0])
+            amin_v = float(saved_bbox[1])
+            amax_u = float(saved_bbox[2])
+            amax_v = float(saved_bbox[3])
+        except Exception:
+            pass
+
+    if slot_axis == "Y":
+        target_u_span = amax_u - amin_u
+        if target_u_span <= 0.0:
+            target_u_span = cmax_u - cmin_u
+        desired_seg_span = float(uv_segments) if uv_segments > 0 else (cmax_v - cmin_v)
+        target_bbox = (amin_u, amin_v, amin_u + target_u_span, amin_v + desired_seg_span)
+    else:
+        target_v_span = amax_v - amin_v
+        if target_v_span <= 0.0:
+            target_v_span = cmax_v - cmin_v
+        desired_seg_span = float(uv_segments) if uv_segments > 0 else (cmax_u - cmin_u)
+        target_bbox = (amin_u, amin_v, amin_u + desired_seg_span, amin_v + target_v_span)
+
+    applied = _tlg_fit_uv_to_bbox(mesh, target_bbox, uv_layer_name=uv_layer_name)
+    if not applied:
+        return
+
+    try:
+        obj["tlg_export_uv_layer"] = uv_layer_name
+        obj["tlg_export_uv_bbox"] = [target_bbox[0], target_bbox[1], target_bbox[2], target_bbox[3]]
+    except Exception:
+        pass
+
+
 def _tlg_view_mode_update(scene, context):
     # Legacy: older versions had a scene-level view mode toggle that hid/shows all taxi lines.
     # The current workflow is per-line via "Edit Curve" / "Edit Mesh" operators, so this is a no-op.
@@ -889,6 +1155,16 @@ def register_properties():
         update=_tlg_curve_settings_update,
     )
 
+    bpy.types.Object.tlg_uv_segments = bpy.props.IntProperty(
+        name="UV Segments",
+        description="Number of UV segments before repeat (0 = full strip, no repeat; 1 = every face reuses one segment)",
+        default=0,
+        min=0,
+        soft_min=0,
+        soft_max=256,
+        update=_tlg_uv_segments_update,
+    )
+
     bpy.types.Object.tlg_segments_mult = bpy.props.FloatProperty(
         name="Segments Mult",
         description="Multiplier for mesh segment density (higher = smoother, heavier)",
@@ -945,6 +1221,10 @@ def unregister_properties():
         pass
     try:
         del bpy.types.Object.tlg_uv_v_m_per_tile
+    except Exception:
+        pass
+    try:
+        del bpy.types.Object.tlg_uv_segments
     except Exception:
         pass
     try:
