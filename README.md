@@ -95,6 +95,7 @@ Steps:
 
 - `Line Width` (meters): adjusts the ribbon width.
 - `Segments`: increases mesh density (higher = smoother, heavier).
+- `UV Segments`: controls UV strip repetition (0 = full strip, no repeat; 1 = one segment repeated; N = repeat every N segments).
 - `Auto Smooth Handles`: keeps curve handles clean and taxi-line-like (recommended).
 - `Normalize Curve`: in Edit Curve mode, select **2+** Bezier points to evenly redistribute points between the first and last selected.
 - `Recompute Taxi Handles`: fixes sharp corner kinks by re-applying Taxi Line Generator smoothing rules.
